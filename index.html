@@ -1,0 +1,1296 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Invoice Management System V2</title>
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <style>
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #f8f9fa; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .spinner {
+      border: 2px solid #f3f4f6;
+      border-top: 2px solid #3b82f6;
+      border-radius: 50%;
+      width: 20px;
+      height: 20px;
+      animation: spin 0.8s linear infinite;
+    }
+    
+    .notification {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 9999;
+      animation: slideIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+    }
+
+    @keyframes slideIn {
+      from { transform: translateX(400px); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+
+    .table-row-hover:hover {
+      background-color: #f8fafc;
+      transition: background-color 0.15s ease;
+    }
+
+    .table-row-selected {
+      background-color: #eff6ff !important;
+      border-left: 3px solid #3b82f6;
+    }
+
+    .card-hover {
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    
+    .card-hover:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    }
+
+    .btn-apple {
+      transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+      font-weight: 500;
+      letter-spacing: -0.01em;
+    }
+
+    .btn-apple:active {
+      transform: scale(0.98);
+    }
+
+    .truncate-2-lines {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .truncate-3-lines {
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    @media (max-width: 640px) {
+      .notification {
+        left: 10px;
+        right: 10px;
+        top: 10px;
+      }
+    }
+  </style>
+</head>
+<body class="bg-gray-50">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useCallback, useMemo } = React;
+
+    const ROLES = {
+      admin: { code: "123789", name: "Администратор", permissions: ["all"] },
+      klimov: { code: "260190", name: "Климов Александр", permissions: ["create", "view"] },
+      larisa: { code: "277577", name: "Лариса Касанова", permissions: ["create", "view"] },
+      akbota: { code: "202593", name: "Акбота Жанабаева", permissions: ["create", "view"] },
+      yusuf: { code: "301624", name: "Юсуф Мамедов", permissions: ["approve", "create", "view"] },
+      kurshad: { code: "456789", name: "Куршад Эрдогмуш", permissions: ["approve", "create", "view"] },
+      mikhail: { code: "402847", name: "Михаил Жибинов", permissions: ["confirm", "view"] },
+      muslim: { code: "403519", name: "Муслим Мамедов", permissions: ["confirm", "view"] },
+      moldir: { code: "501248", name: "Молдир Утешова", permissions: ["pay", "view"] },
+      sabina: { code: "502639", name: "Сабина Мусаева", permissions: ["pay", "view"] }
+    };
+
+    const STATUS_LABELS = {
+      pending: "На согласовании",
+      approved: "Согласован",
+      partial_confirmed: "Частично подтвержден (1/2)",
+      confirmed: "Подтвержден к оплате (2/2)",
+      paid: "Оплачен",
+      rejected: "Отклонен"
+    };
+
+    const STATUS_COLORS = {
+      pending: "bg-amber-50 text-amber-800 border-amber-200",
+      approved: "bg-blue-50 text-blue-800 border-blue-200",
+      partial_confirmed: "bg-orange-50 text-orange-800 border-orange-200",
+      confirmed: "bg-green-50 text-green-800 border-green-200",
+      paid: "bg-emerald-50 text-emerald-800 border-emerald-200",
+      rejected: "bg-red-50 text-red-800 border-red-200"
+    };
+
+    function formatDate(dateStr) {
+      if (!dateStr) return '-';
+      const date = new Date(dateStr);
+      if (isNaN(date)) return dateStr;
+      return date.toLocaleDateString('ru-RU');
+    }
+
+    function formatDateTime(dateStr) {
+      if (!dateStr) return '-';
+      const date = new Date(dateStr);
+      if (isNaN(date)) return dateStr;
+      return date.toLocaleString('ru-RU');
+    }
+
+    function formatAmount(amount, currency) {
+      if (!amount && amount !== 0) return '0.00';
+      const formatted = new Intl.NumberFormat('ru-RU', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      }).format(amount);
+      return `${formatted} ${currency || 'KZT'}`;
+    }
+
+    function calculateTotalsByCurrency(invoices) {
+      const totals = {};
+      invoices.forEach(inv => {
+        const curr = inv.currency || 'KZT';
+        if (!totals[curr]) totals[curr] = 0;
+        totals[curr] += parseFloat(inv.amount) || 0;
+      });
+      return totals;
+    }
+
+    function hasPermission(user, permission) {
+      if (!user) return false;
+      return user.permissions.includes('all') || user.permissions.includes(permission);
+    }
+
+    function checkIfUserConfirmed(invoice, userName) {
+      return invoice.confirmedBy1 === userName || invoice.confirmedBy2 === userName;
+    }
+
+    const API = {
+      getInvoices: () => new Promise((resolve, reject) => {
+        google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).getInvoices();
+      }),
+      saveInvoice: (data) => new Promise((resolve, reject) => {
+        google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).saveInvoice(data);
+      }),
+      updateInvoiceStatus: (id, status, user) => new Promise((resolve, reject) => {
+        google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).updateInvoiceStatus(id, status, user);
+      }),
+      uploadFiles: (files, number) => new Promise((resolve, reject) => {
+        google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).uploadFiles(files, number);
+      }),
+      getConfig: () => new Promise((resolve, reject) => {
+        google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).getConfig();
+      }),
+      getSuppliers: () => new Promise((resolve, reject) => {
+        google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).getSuppliers();
+      }),
+      addComment: (invoiceId, user, text) => new Promise((resolve, reject) => {
+        google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).addComment(invoiceId, user, text);
+      }),
+      markPrinted: (invoiceId, user) => new Promise((resolve, reject) => {
+        google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).markInvoicePrinted(invoiceId, user);
+      })
+    };
+
+    function Notification({ message, type, onClose }) {
+      useEffect(() => {
+        const timer = setTimeout(onClose, 3500);
+        return () => clearTimeout(timer);
+      }, [onClose]);
+
+      const colors = {
+        success: 'bg-green-500',
+        error: 'bg-red-500',
+        info: 'bg-blue-500'
+      };
+
+      return (
+        <div className={`notification ${colors[type]} text-white px-4 py-3 sm:px-6 sm:py-4 rounded-xl shadow-xl flex items-center gap-3`}>
+          <span className="text-lg sm:text-xl">
+            {type === 'success' && '✓'}
+            {type === 'error' && '✕'}
+            {type === 'info' && 'i'}
+          </span>
+          <span className="text-sm sm:text-base">{message}</span>
+          <button onClick={onClose} className="ml-auto text-xl hover:opacity-80">×</button>
+        </div>
+      );
+    }
+
+    function AuthScreen({ onLogin }) {
+      const [code, setCode] = useState('');
+      const [error, setError] = useState('');
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        if (!code.trim()) {
+          setError('Введите код доступа');
+          return;
+        }
+        const user = Object.values(ROLES).find(role => role.code === code.trim());
+        if (!user) {
+          setError('Неверный код доступа!');
+          return;
+        }
+        onLogin(user);
+      };
+
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-10 w-full max-w-md">
+            <div className="text-center mb-8">
+              <div className="w-16 h-16 bg-blue-600 rounded-2xl mx-auto mb-4 flex items-center justify-center">
+                <span className="text-3xl text-white">📊</span>
+              </div>
+              <h1 className="text-2xl sm:text-3xl font-semibold text-gray-900 mb-2">
+                Система управления счетами
+              </h1>
+              <p className="text-sm text-gray-500">
+                Введите ваш код доступа
+              </p>
+            </div>
+            
+            <form onSubmit={handleSubmit} className="space-y-5">
+              <div>
+                <input
+                  type="password"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  placeholder="Код доступа"
+                  maxLength="6"
+                  className="w-full px-4 py-3 text-center text-lg border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+                />
+              </div>
+              
+              {error && (
+                <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-sm text-center">
+                  {error}
+                </div>
+              )}
+              
+              <button
+                type="submit"
+                className="w-full bg-blue-600 text-white py-3 rounded-xl font-medium hover:bg-blue-700 active:scale-98 transition btn-apple"
+              >
+                Войти
+              </button>
+            </form>
+          </div>
+        </div>
+      );
+    }
+
+    function Header({ user, onLogout, onRefresh, lastUpdate, loading }) {
+      return (
+        <div className="bg-white border-b border-gray-200 sticky top-0 z-40">
+          <div className="max-w-full mx-auto px-4 py-3 sm:py-4">
+            <div className="flex justify-between items-center gap-2 sm:gap-4">
+              <div className="flex items-center gap-2 sm:gap-3">
+                <div className="w-8 h-8 sm:w-10 sm:h-10 bg-blue-600 rounded-xl flex items-center justify-center">
+                  <span className="text-lg sm:text-xl">📊</span>
+                </div>
+                <div>
+                  <h1 className="text-base sm:text-lg font-semibold text-gray-900">Счета</h1>
+                  <p className="text-xs text-gray-500 hidden sm:block">Invoice Management</p>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-2 sm:gap-3">
+                <button
+                  onClick={onRefresh}
+                  disabled={loading}
+                  className="p-2 sm:px-3 sm:py-2 text-gray-600 hover:bg-gray-100 rounded-lg transition disabled:opacity-50 btn-apple"
+                  title="Обновить"
+                >
+                  <span className="text-lg">🔄</span>
+                </button>
+                
+                <div className="hidden sm:block text-right">
+                  <div className="text-sm font-medium text-gray-900">{user.name}</div>
+                  {lastUpdate && (
+                    <div className="text-xs text-gray-500">
+                      {new Date(lastUpdate).toLocaleTimeString('ru-RU')}
+                    </div>
+                  )}
+                </div>
+                
+                <button
+                  onClick={onLogout}
+                  className="px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg transition btn-apple"
+                >
+                  Выйти
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function Tabs({ activeTab, onChange }) {
+      const tabs = [
+        { id: 'dashboard', label: 'Дашборд', icon: '📊' },
+        { id: 'invoices', label: 'Счета', icon: '📋' }
+      ];
+
+      return (
+        <div className="bg-white border-b border-gray-200">
+          <div className="max-w-full mx-auto px-4">
+            <div className="flex gap-1 sm:gap-4">
+              {tabs.map(tab => (
+                <button
+                  key={tab.id}
+                  onClick={() => onChange(tab.id)}
+                  className={`flex items-center gap-2 py-3 px-3 sm:px-4 border-b-2 font-medium transition text-sm sm:text-base ${
+                    activeTab === tab.id
+                      ? 'border-blue-600 text-blue-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  <span className="text-base sm:text-lg">{tab.icon}</span>
+                  <span className="hidden sm:inline">{tab.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function StatCard({ title, value, subtitle, icon, bgColor, onClick, totals }) {
+      return (
+        <div
+          onClick={onClick}
+          className={`${bgColor} rounded-xl p-4 sm:p-6 cursor-pointer card-hover`}
+        >
+          <div className="flex justify-between items-start mb-2">
+            <div className="text-xs sm:text-sm font-medium text-gray-700">{title}</div>
+            <div className="text-2xl sm:text-3xl">{icon}</div>
+          </div>
+          <div className="text-2xl sm:text-3xl font-bold text-gray-900">{value}</div>
+          {subtitle && (
+            <div className="text-xs text-gray-600 mt-1">{subtitle}</div>
+          )}
+          {totals && Object.keys(totals).length > 0 && (
+            <div className="mt-3 pt-3 border-t border-gray-200 space-y-1">
+              {Object.entries(totals).map(([curr, amount]) => (
+                <div key={curr} className="text-xs sm:text-sm font-semibold text-gray-700">
+                  {formatAmount(amount, curr)}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function Dashboard({ invoices, user, onFilterByStatus }) {
+      const stats = useMemo(() => {
+        const activeInvoices = invoices.filter(inv => !inv.archived);
+        const statusGroups = {
+          pending: activeInvoices.filter(inv => inv.status === 'pending'),
+          approved: activeInvoices.filter(inv => inv.status === 'approved'),
+          partial_confirmed: activeInvoices.filter(inv => inv.status === 'partial_confirmed'),
+          confirmed: activeInvoices.filter(inv => inv.status === 'confirmed'),
+          paid: activeInvoices.filter(inv => inv.status === 'paid'),
+          rejected: activeInvoices.filter(inv => inv.status === 'rejected')
+        };
+
+        return {
+          total: activeInvoices.length,
+          totalSums: calculateTotalsByCurrency(activeInvoices),
+          pending: statusGroups.pending.length,
+          pendingSums: calculateTotalsByCurrency(statusGroups.pending),
+          approved: statusGroups.approved.length,
+          approvedSums: calculateTotalsByCurrency(statusGroups.approved),
+          partialConfirmed: statusGroups.partial_confirmed.length,
+          partialConfirmedSums: calculateTotalsByCurrency(statusGroups.partial_confirmed),
+          confirmed: statusGroups.confirmed.length,
+          confirmedSums: calculateTotalsByCurrency(statusGroups.confirmed),
+          paid: statusGroups.paid.length,
+          paidSums: calculateTotalsByCurrency(statusGroups.paid),
+          rejected: statusGroups.rejected.length,
+          rejectedSums: calculateTotalsByCurrency(statusGroups.rejected),
+          archived: invoices.filter(inv => inv.archived).length
+        };
+      }, [invoices]);
+
+      return (
+        <div className="max-w-full mx-auto px-4 py-4 sm:py-6">
+          <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+            <StatCard title="Всего счетов" value={stats.total} icon="📊" bgColor="bg-blue-50" onClick={() => onFilterByStatus('')} totals={stats.totalSums} />
+            <StatCard title="На согласовании" value={stats.pending} subtitle="Ожидают снабжение" icon="⏳" bgColor="bg-amber-50" onClick={() => onFilterByStatus('pending')} totals={stats.pendingSums} />
+            <StatCard title="Согласовано" value={stats.approved} subtitle="Ожидают финансы" icon="✅" bgColor="bg-blue-50" onClick={() => onFilterByStatus('approved')} totals={stats.approvedSums} />
+            <StatCard title="Частично подтверждено" value={stats.partialConfirmed} subtitle="Нужно 1 подтверждение" icon="⚡" bgColor="bg-orange-50" onClick={() => onFilterByStatus('partial_confirmed')} totals={stats.partialConfirmedSums} />
+            <StatCard title="К оплате" value={stats.confirmed} subtitle="Подтверждено 2/2" icon="💰" bgColor="bg-green-50" onClick={() => onFilterByStatus('confirmed')} totals={stats.confirmedSums} />
+            <StatCard title="Оплачены" value={stats.paid} icon="✓" bgColor="bg-emerald-50" onClick={() => onFilterByStatus('paid')} totals={stats.paidSums} />
+            <StatCard title="Отклонены" value={stats.rejected} icon="✕" bgColor="bg-red-50" onClick={() => onFilterByStatus('rejected')} totals={stats.rejectedSums} />
+            <StatCard title="В архиве" value={stats.archived} icon="📦" bgColor="bg-gray-50" onClick={() => {}} />
+          </div>
+        </div>
+      );
+    }
+
+    function InvoicesView({ invoices, user, onView, onAction, onCreateNew, selectedIds, onSelectionChange, initialStatusFilter }) {
+      const [searchTerm, setSearchTerm] = useState('');
+      const [statusFilter, setStatusFilter] = useState('');
+      const [showArchived, setShowArchived] = useState(false);
+      const [sortBy, setSortBy] = useState('created_desc');
+      const [viewMode, setViewMode] = useState('table'); // 'table' or 'cards'
+
+      useEffect(() => {
+        if (initialStatusFilter) {
+          setStatusFilter(initialStatusFilter);
+        }
+      }, [initialStatusFilter]);
+
+      const filteredAndSortedInvoices = useMemo(() => {
+        let filtered = invoices;
+
+        if (!showArchived) filtered = filtered.filter(inv => !inv.archived);
+        if (searchTerm) {
+          const term = searchTerm.toLowerCase();
+          filtered = filtered.filter(inv => 
+            inv.number.toLowerCase().includes(term) ||
+            inv.supplier.toLowerCase().includes(term) ||
+            inv.company.toLowerCase().includes(term) ||
+            inv.purpose.toLowerCase().includes(term)
+          );
+        }
+        if (statusFilter) filtered = filtered.filter(inv => inv.status === statusFilter);
+
+        const sorted = [...filtered];
+        if (sortBy === 'date_desc') sorted.sort((a, b) => new Date(b.date) - new Date(a.date));
+        else if (sortBy === 'date_asc') sorted.sort((a, b) => new Date(a.date) - new Date(b.date));
+        else if (sortBy === 'amount_desc') sorted.sort((a, b) => b.amount - a.amount);
+        else if (sortBy === 'amount_asc') sorted.sort((a, b) => a.amount - b.amount);
+        else if (sortBy === 'created_desc') sorted.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        else if (sortBy === 'created_asc') sorted.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+        return sorted;
+      }, [invoices, searchTerm, statusFilter, showArchived, sortBy]);
+
+      const selectedTotals = useMemo(() => {
+        const selected = filteredAndSortedInvoices.filter(inv => selectedIds.includes(inv.id));
+        return calculateTotalsByCurrency(selected);
+      }, [filteredAndSortedInvoices, selectedIds]);
+
+      const handleSelectAll = (e) => {
+        if (e.target.checked) {
+          onSelectionChange(filteredAndSortedInvoices.map(inv => inv.id));
+        } else {
+          onSelectionChange([]);
+        }
+      };
+
+      const handleSelectOne = (id) => {
+        if (selectedIds.includes(id)) {
+          onSelectionChange(selectedIds.filter(i => i !== id));
+        } else {
+          onSelectionChange([...selectedIds, id]);
+        }
+      };
+
+      const canCreate = hasPermission(user, 'create') || hasPermission(user, 'all');
+
+      return (
+        <div className="max-w-full mx-auto px-4 py-4 sm:py-6">
+          {/* Фильтры */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 mb-4 p-3 sm:p-4">
+            <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 mb-3">
+              <input
+                type="text"
+                placeholder="Поиск..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+              />
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+              >
+                <option value="">Все статусы</option>
+                <option value="pending">На согласовании</option>
+                <option value="approved">Согласованы</option>
+                <option value="partial_confirmed">Частично подтверждены</option>
+                <option value="confirmed">К оплате</option>
+                <option value="paid">Оплачены</option>
+                <option value="rejected">Отклонены</option>
+              </select>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+              >
+                <option value="created_desc">🆕 Новые</option>
+                <option value="created_asc">🕐 Старые</option>
+                <option value="amount_desc">💰 Сумма ↓</option>
+                <option value="amount_asc">💰 Сумма ↑</option>
+              </select>
+            </div>
+
+            <div className="flex flex-wrap gap-2 items-center">
+              <div className="flex gap-1 border border-gray-300 rounded-lg p-1">
+                <button
+                  onClick={() => setViewMode('table')}
+                  className={`px-3 py-1.5 rounded text-sm font-medium transition ${
+                    viewMode === 'table' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+                  }`}
+                >
+                  Таблица
+                </button>
+                <button
+                  onClick={() => setViewMode('cards')}
+                  className={`px-3 py-1.5 rounded text-sm font-medium transition ${
+                    viewMode === 'cards' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+                  }`}
+                >
+                  Карточки
+                </button>
+              </div>
+
+              <label className="flex items-center gap-2 px-3 py-1.5 border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 transition">
+                <input
+                  type="checkbox"
+                  checked={showArchived}
+                  onChange={(e) => setShowArchived(e.target.checked)}
+                  className="w-4 h-4 text-blue-600 rounded"
+                />
+                <span className="text-sm">Архивные</span>
+              </label>
+
+              {canCreate && (
+                <button
+                  onClick={onCreateNew}
+                  className="ml-auto px-4 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition flex items-center gap-2 text-sm font-medium btn-apple"
+                >
+                  <span>+</span>
+                  <span className="hidden sm:inline">Создать</span>
+                </button>
+              )}
+            </div>
+
+            {selectedIds.length > 0 && (
+              <div className="mt-3 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                <div className="flex justify-between items-center flex-wrap gap-2">
+                  <div className="text-sm font-semibold text-blue-900">
+                    Выбрано: {selectedIds.length}
+                  </div>
+                  <div className="flex gap-3 flex-wrap">
+                    {Object.entries(selectedTotals).map(([curr, amount]) => (
+                      <div key={curr} className="text-sm font-bold text-blue-900">
+                        {formatAmount(amount, curr)}
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => onSelectionChange([])}
+                    className="px-3 py-1 bg-blue-200 text-blue-800 rounded-lg hover:bg-blue-300 text-sm font-medium transition"
+                  >
+                    Снять
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Таблица или Карточки */}
+          {viewMode === 'table' ? (
+            <TableView
+              invoices={filteredAndSortedInvoices}
+              user={user}
+              onView={onView}
+              onAction={onAction}
+              selectedIds={selectedIds}
+              handleSelectAll={handleSelectAll}
+              handleSelectOne={handleSelectOne}
+            />
+          ) : (
+            <CardsView
+              invoices={filteredAndSortedInvoices}
+              user={user}
+              onView={onView}
+              onAction={onAction}
+              selectedIds={selectedIds}
+              handleSelectOne={handleSelectOne}
+            />
+          )}
+
+          {filteredAndSortedInvoices.length === 0 && (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
+              <div className="text-gray-400 text-6xl mb-4">📋</div>
+              <div className="text-gray-600">Нет данных для отображения</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function TableView({ invoices, user, onView, onAction, selectedIds, handleSelectAll, handleSelectOne }) {
+      if (invoices.length === 0) return null;
+
+      return (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[800px]">
+              <thead className="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="p-3 text-left w-10">
+                    <input
+                      type="checkbox"
+                      onChange={handleSelectAll}
+                      checked={selectedIds.length === invoices.length && invoices.length > 0}
+                      className="w-4 h-4 text-blue-600 rounded"
+                    />
+                  </th>
+                  <th className="p-3 text-left text-xs font-semibold text-gray-700 uppercase">№</th>
+                  <th className="p-3 text-left text-xs font-semibold text-gray-700 uppercase">Статус</th>
+                  <th className="p-3 text-left text-xs font-semibold text-gray-700 uppercase">Компания</th>
+                  <th className="p-3 text-left text-xs font-semibold text-gray-700 uppercase">Поставщик</th>
+                  <th className="p-3 text-right text-xs font-semibold text-gray-700 uppercase">Сумма</th>
+                  <th className="p-3 text-left text-xs font-semibold text-gray-700 uppercase">Срок</th>
+                  <th className="p-3 text-center text-xs font-semibold text-gray-700 uppercase">Действия</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoices.map(inv => {
+                  const canApprove = inv.status === 'pending' && hasPermission(user, 'approve');
+                  const canConfirm = (inv.status === 'approved' || inv.status === 'partial_confirmed') && hasPermission(user, 'confirm') && !checkIfUserConfirmed(inv, user.name);
+                  const canPay = inv.status === 'confirmed' && hasPermission(user, 'pay');
+                  const canReject = (
+                    (inv.status === 'pending' && hasPermission(user, 'approve')) ||
+                    ((inv.status === 'approved' || inv.status === 'partial_confirmed') && hasPermission(user, 'confirm')) ||
+                    (inv.status === 'confirmed' && hasPermission(user, 'pay'))
+                  );
+
+                  return (
+                    <tr
+                      key={inv.id}
+                      className={`border-b border-gray-100 table-row-hover ${selectedIds.includes(inv.id) ? 'table-row-selected' : ''}`}
+                    >
+                      <td className="p-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(inv.id)}
+                          onChange={() => handleSelectOne(inv.id)}
+                          className="w-4 h-4 text-blue-600 rounded"
+                        />
+                      </td>
+                      <td className="p-3 font-semibold text-sm">{inv.number}</td>
+                      <td className="p-3">
+                        <span className={`px-2 py-1 rounded-lg text-xs font-medium border ${STATUS_COLORS[inv.status]}`}>
+                          {STATUS_LABELS[inv.status]}
+                        </span>
+                      </td>
+                      <td className="p-3 text-sm max-w-[200px] truncate" title={inv.company}>{inv.company}</td>
+                      <td className="p-3 text-sm max-w-[200px] truncate" title={inv.supplier}>{inv.supplier}</td>
+                      <td className="p-3 text-right font-semibold text-sm whitespace-nowrap">{formatAmount(inv.amount, inv.currency)}</td>
+                      <td className="p-3 text-sm">{formatDate(inv.dueDate)}</td>
+                      <td className="p-3">
+                        <div className="flex gap-1 justify-center flex-wrap">
+                          <button
+                            onClick={() => onView(inv)}
+                            className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                            title="Просмотр"
+                          >
+                            👁️
+                          </button>
+                          {canApprove && (
+                            <button
+                              onClick={() => onAction(inv, 'approve')}
+                              className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition"
+                              title="Согласовать"
+                            >
+                              ✓
+                            </button>
+                          )}
+                          {canConfirm && (
+                            <button
+                              onClick={() => onAction(inv, 'confirm')}
+                              className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                              title="Подтвердить"
+                            >
+                              💰
+                            </button>
+                          )}
+                          {canPay && (
+                            <button
+                              onClick={() => onAction(inv, 'pay')}
+                              className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition"
+                              title="Оплатить"
+                            >
+                              💳
+                            </button>
+                          )}
+                          {canReject && (
+                            <button
+                              onClick={() => onAction(inv, 'reject')}
+                              className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition"
+                              title="Отклонить"
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
+    function CardsView({ invoices, user, onView, onAction, selectedIds, handleSelectOne }) {
+      if (invoices.length === 0) return null;
+
+      return (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {invoices.map(inv => {
+            const canApprove = inv.status === 'pending' && hasPermission(user, 'approve');
+            const canConfirm = (inv.status === 'approved' || inv.status === 'partial_confirmed') && hasPermission(user, 'confirm') && !checkIfUserConfirmed(inv, user.name);
+            const canPay = inv.status === 'confirmed' && hasPermission(user, 'pay');
+            const canReject = (
+              (inv.status === 'pending' && hasPermission(user, 'approve')) ||
+              ((inv.status === 'approved' || inv.status === 'partial_confirmed') && hasPermission(user, 'confirm')) ||
+              (inv.status === 'confirmed' && hasPermission(user, 'pay'))
+            );
+
+            return (
+              <div
+                key={inv.id}
+                className={`bg-white rounded-xl shadow-sm border-2 p-4 card-hover ${
+                  selectedIds.includes(inv.id) ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
+                }`}
+              >
+                <div className="flex items-start gap-3 mb-3">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.includes(inv.id)}
+                    onChange={() => handleSelectOne(inv.id)}
+                    className="mt-1 w-4 h-4 text-blue-600 rounded"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-2">
+                      <h3 className="text-lg font-bold text-gray-900 truncate">№{inv.number}</h3>
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium border ${STATUS_COLORS[inv.status]}`}>
+                        {STATUS_LABELS[inv.status].split(' ')[0]}
+                      </span>
+                    </div>
+                    <div className="text-sm text-gray-600 truncate mb-2">{inv.company}</div>
+                    <div className="text-sm text-gray-600 truncate mb-2">{inv.supplier}</div>
+                    <div className="text-xl font-bold text-blue-600 mb-2">
+                      {formatAmount(inv.amount, inv.currency)}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      Срок: {formatDate(inv.dueDate)}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex gap-2 flex-wrap">
+                  <button
+                    onClick={() => onView(inv)}
+                    className="flex-1 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition btn-apple"
+                  >
+                    Просмотр
+                  </button>
+                  {canApprove && (
+                    <button
+                      onClick={() => onAction(inv, 'approve')}
+                      className="px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium transition btn-apple"
+                    >
+                      ✓
+                    </button>
+                  )}
+                  {canConfirm && (
+                    <button
+                      onClick={() => onAction(inv, 'confirm')}
+                      className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition btn-apple"
+                    >
+                      💰
+                    </button>
+                  )}
+                  {canPay && (
+                    <button
+                      onClick={() => onAction(inv, 'pay')}
+                      className="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium transition btn-apple"
+                    >
+                      💳
+                    </button>
+                  )}
+                  {canReject && (
+                    <button
+                      onClick={() => onAction(inv, 'reject')}
+                      className="px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-medium transition btn-apple"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // Модальные окна будут в следующем файле - часть 2
+    function ViewInvoiceModal({ invoice, isOpen, onClose }) {
+      if (!isOpen || !invoice) return null;
+
+      return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50" onClick={onClose}>
+          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="p-4 sm:p-6 border-b border-gray-200 flex justify-between items-center sticky top-0 bg-white">
+              <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Счет №{invoice.number}</h2>
+              <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-3xl leading-none">×</button>
+            </div>
+
+            <div className="p-4 sm:p-6 space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <div className="text-xs text-gray-500 mb-1">Компания</div>
+                  <div className="text-sm font-semibold text-gray-900">{invoice.company}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500 mb-1">Поставщик</div>
+                  <div className="text-sm font-semibold text-gray-900">{invoice.supplier}</div>
+                </div>
+              </div>
+
+              <div className="bg-blue-50 p-4 rounded-xl border border-blue-200">
+                <div className="text-2xl sm:text-3xl font-bold text-blue-900">
+                  {formatAmount(invoice.amount, invoice.currency)}
+                </div>
+                <div className="mt-2 flex gap-2 flex-wrap">
+                  <span className={`px-2 py-1 rounded-lg text-xs font-medium border ${STATUS_COLORS[invoice.status]}`}>
+                    {STATUS_LABELS[invoice.status]}
+                  </span>
+                </div>
+              </div>
+
+              <div className="bg-amber-50 p-4 rounded-xl border border-amber-200">
+                <div className="text-xs text-gray-600 mb-1">Назначение платежа</div>
+                <div className="text-sm text-gray-900">{invoice.purpose}</div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <div className="text-xs text-gray-500">Дата счета</div>
+                  <div className="font-medium">{formatDate(invoice.date)}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500">Срок оплаты</div>
+                  <div className="font-medium">{formatDate(invoice.dueDate)}</div>
+                </div>
+              </div>
+
+              {invoice.files && (
+                <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
+                  <div className="text-xs text-gray-600 mb-2">Файлы</div>
+                  {invoice.files.split('\n').map((url, i) => (
+                    <a key={i} href={url} target="_blank" rel="noopener noreferrer" className="block text-sm text-blue-600 hover:underline mb-1">
+                      Файл {i + 1}
+                    </a>
+                  ))}
+                </div>
+              )}
+
+              <div className="bg-blue-50 p-4 rounded-xl border border-blue-200">
+                <div className="text-xs font-semibold text-gray-700 mb-2">История согласования</div>
+                <div className="space-y-1 text-xs text-gray-700">
+                  {invoice.createdBy && <div>📝 Создан: {invoice.createdBy}</div>}
+                  {invoice.approvedBy && <div>✓ Согласован: {invoice.approvedBy}</div>}
+                  {invoice.confirmedBy1 && <div>💰 Подтвержден (1/2): {invoice.confirmedBy1}</div>}
+                  {invoice.confirmedBy2 && <div>💰 Подтвержден (2/2): {invoice.confirmedBy2}</div>}
+                  {invoice.paidBy && <div>💳 Оплачен: {invoice.paidBy}</div>}
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 sm:p-6 border-t border-gray-200 flex justify-end sticky bottom-0 bg-white">
+              <button onClick={onClose} className="px-6 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium transition btn-apple">
+                Закрыть
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function ActionModal({ invoice, action, isOpen, onClose, onConfirm, loading }) {
+      const [rejectionReason, setRejectionReason] = useState('');
+      const [error, setError] = useState('');
+
+      if (!isOpen || !invoice) return null;
+
+      const handleConfirm = () => {
+        if (action === 'reject' && !rejectionReason.trim()) {
+          setError('Укажите причину отклонения!');
+          return;
+        }
+        onConfirm(rejectionReason);
+        setRejectionReason('');
+      };
+
+      const titles = {
+        approve: 'Согласование',
+        confirm: 'Подтверждение',
+        pay: 'Оплата',
+        reject: 'Отклонение'
+      };
+
+      const buttonLabels = {
+        approve: 'Согласовать',
+        confirm: 'Подтвердить',
+        pay: 'Оплатить',
+        reject: 'Отклонить'
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50" onClick={onClose}>
+          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="p-4 sm:p-6 border-b border-gray-200">
+              <h2 className="text-xl font-bold text-gray-900">{titles[action]}</h2>
+            </div>
+
+            <div className="p-4 sm:p-6 space-y-4">
+              <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
+                <div className="text-sm"><strong>Счет №:</strong> {invoice.number}</div>
+                <div className="text-sm"><strong>Поставщик:</strong> {invoice.supplier}</div>
+                <div className="text-sm"><strong>Сумма:</strong> {formatAmount(invoice.amount, invoice.currency)}</div>
+              </div>
+
+              {action === 'reject' && (
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Причина отклонения *</label>
+                  <textarea
+                    value={rejectionReason}
+                    onChange={(e) => { setRejectionReason(e.target.value); setError(''); }}
+                    placeholder="Опишите причину..."
+                    rows="4"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent outline-none"
+                  />
+                  {error && <div className="mt-2 text-red-600 text-sm">{error}</div>}
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 sm:p-6 border-t border-gray-200 flex justify-end gap-3">
+              <button onClick={onClose} disabled={loading} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium transition btn-apple disabled:opacity-50">
+                Отмена
+              </button>
+              <button onClick={handleConfirm} disabled={loading} className={`px-4 py-2 text-white rounded-lg font-medium transition btn-apple disabled:opacity-50 flex items-center gap-2 ${
+                action === 'reject' ? 'bg-red-600 hover:bg-red-700' : action === 'approve' ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'
+              }`}>
+                {loading && <div className="spinner"></div>}
+                {buttonLabels[action]}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function CreateInvoiceModal({ isOpen, onClose, onCreate, config }) {
+      const [formData, setFormData] = useState({
+        company: '', number: '', supplier: '', supplierBIN: '', amount: '', currency: 'KZT',
+        purpose: '', date: new Date().toISOString().split('T')[0],
+        dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        priority: 'Обычный', notes: ''
+      });
+      const [files, setFiles] = useState([]);
+      const [error, setError] = useState('');
+      const [loading, setLoading] = useState(false);
+
+      useEffect(() => {
+        if (isOpen) {
+          setFormData({
+            company: '', number: '', supplier: '', supplierBIN: '', amount: '', currency: 'KZT',
+            purpose: '', date: new Date().toISOString().split('T')[0],
+            dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            priority: 'Обычный', notes: ''
+          });
+          setFiles([]);
+          setError('');
+        }
+      }, [isOpen]);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (!formData.company || !formData.number || !formData.supplier || !formData.amount || !formData.purpose || files.length === 0) {
+          setError('Заполните все обязательные поля и прикрепите файлы');
+          return;
+        }
+        setLoading(true);
+        try {
+          const filesData = await Promise.all(
+            Array.from(files).map(file => new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve({ name: file.name, type: file.type, size: file.size, content: reader.result.split(',')[1] });
+              reader.onerror = reject;
+              reader.readAsDataURL(file);
+            }))
+          );
+          await onCreate(formData, filesData);
+        } catch (err) {
+          setError(err.message || 'Ошибка создания счета');
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      if (!isOpen) return null;
+
+      return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 overflow-y-auto" onClick={onClose}>
+          <div className="bg-white rounded-2xl max-w-2xl w-full my-8 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="p-4 sm:p-6 border-b border-gray-200 sticky top-0 bg-white">
+              <h2 className="text-xl font-bold text-gray-900">Создать счет</h2>
+            </div>
+
+            <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-4 max-h-[calc(100vh-200px)] overflow-y-auto">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Компания *</label>
+                  <select value={formData.company} onChange={(e) => setFormData(prev => ({...prev, company: e.target.value}))} className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none" required>
+                    <option value="">Выберите</option>
+                    {config?.companies.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Номер счета *</label>
+                  <input type="text" value={formData.number} onChange={(e) => setFormData(prev => ({...prev, number: e.target.value}))} className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none" required />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Поставщик *</label>
+                <input type="text" value={formData.supplier} onChange={(e) => setFormData(prev => ({...prev, supplier: e.target.value}))} className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none" required />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Сумма *</label>
+                  <input type="number" step="0.01" value={formData.amount} onChange={(e) => setFormData(prev => ({...prev, amount: e.target.value}))} className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none" required />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Валюта *</label>
+                  <select value={formData.currency} onChange={(e) => setFormData(prev => ({...prev, currency: e.target.value}))} className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none" required>
+                    {config?.currencies.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Назначение платежа *</label>
+                <textarea value={formData.purpose} onChange={(e) => setFormData(prev => ({...prev, purpose: e.target.value}))} rows="3" className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none" required />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Дата счета *</label>
+                  <input type="date" value={formData.date} onChange={(e) => setFormData(prev => ({...prev, date: e.target.value}))} className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none" required />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Срок оплаты *</label>
+                  <input type="date" value={formData.dueDate} onChange={(e) => setFormData(prev => ({...prev, dueDate: e.target.value}))} className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none" required />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Файлы (до 3 шт, до 20MB) *</label>
+                <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" onChange={(e) => setFiles(Array.from(e.target.files))} className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none" />
+              </div>
+
+              {error && <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">{error}</div>}
+
+              <div className="flex justify-end gap-3 pt-4">
+                <button type="button" onClick={onClose} disabled={loading} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium transition btn-apple disabled:opacity-50">Отмена</button>
+                <button type="submit" disabled={loading} className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium transition btn-apple disabled:opacity-50 flex items-center gap-2">
+                  {loading && <div className="spinner"></div>}
+                  Создать
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      );
+    }
+
+    function App() {
+      const [currentUser, setCurrentUser] = useState(null);
+      const [invoices, setInvoices] = useState([]);
+      const [config, setConfig] = useState(null);
+      const [loading, setLoading] = useState(false);
+      const [lastUpdate, setLastUpdate] = useState(null);
+      const [activeTab, setActiveTab] = useState('dashboard');
+      
+      const [viewModalOpen, setViewModalOpen] = useState(false);
+      const [viewModalInvoice, setViewModalInvoice] = useState(null);
+      const [actionModalOpen, setActionModalOpen] = useState(false);
+      const [actionModalInvoice, setActionModalInvoice] = useState(null);
+      const [actionModalType, setActionModalType] = useState(null);
+      const [createModalOpen, setCreateModalOpen] = useState(false);
+      
+      const [statusFilter, setStatusFilter] = useState('');
+      const [notification, setNotification] = useState(null);
+      const [selectedInvoiceIds, setSelectedInvoiceIds] = useState([]);
+
+      const showNotification = (message, type = 'success') => {
+        setNotification({ message, type });
+      };
+
+      useEffect(() => {
+        if (currentUser) loadData();
+      }, [currentUser]);
+
+      const loadData = async () => {
+        setLoading(true);
+        try {
+          const [invoicesData, configData] = await Promise.all([
+            API.getInvoices(),
+            API.getConfig()
+          ]);
+          setInvoices(invoicesData);
+          setConfig(configData);
+          setLastUpdate(Date.now());
+        } catch (error) {
+          console.error('Error loading data:', error);
+          showNotification('Ошибка загрузки данных', 'error');
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleLogin = (user) => {
+        setCurrentUser(user);
+        sessionStorage.setItem('currentUser', JSON.stringify(user));
+      };
+
+      const handleLogout = () => {
+        setCurrentUser(null);
+        sessionStorage.removeItem('currentUser');
+      };
+
+      useEffect(() => {
+        const savedUser = sessionStorage.getItem('currentUser');
+        if (savedUser) {
+          try {
+            setCurrentUser(JSON.parse(savedUser));
+          } catch (e) {
+            sessionStorage.removeItem('currentUser');
+          }
+        }
+      }, []);
+
+      const handleActionConfirm = async (rejectionReason) => {
+        if (!actionModalInvoice || !actionModalType) return;
+        setLoading(true);
+        try {
+          let newStatus = '';
+          if (actionModalType === 'approve') newStatus = 'approved';
+          else if (actionModalType === 'reject') newStatus = 'rejected';
+          else if (actionModalType === 'pay') newStatus = 'paid';
+          else if (actionModalType === 'confirm') newStatus = actionModalInvoice.confirmedBy1 ? 'confirmed' : 'partial_confirmed';
+
+          const result = await API.updateInvoiceStatus(actionModalInvoice.id, newStatus, { ...currentUser, rejectionReason });
+          if (result.success) {
+            setActionModalOpen(false);
+            setActionModalInvoice(null);
+            setActionModalType(null);
+            await loadData();
+            showNotification('Статус обновлен!', 'success');
+          } else {
+            showNotification('Ошибка: ' + result.error, 'error');
+          }
+        } catch (error) {
+          showNotification('Ошибка обновления', 'error');
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleCreateInvoice = async (formData, filesData) => {
+        setLoading(true);
+        try {
+          const uploadedFiles = await API.uploadFiles(filesData, formData.number);
+          const invoiceData = { ...formData, amount: parseFloat(formData.amount), files: uploadedFiles.map(f => f.url).join('\n'), createdBy: currentUser.name };
+          const result = await API.saveInvoice(invoiceData);
+          if (result.success) {
+            setCreateModalOpen(false);
+            await loadData();
+            showNotification('Счет создан!', 'success');
+          } else {
+            throw new Error(result.error || 'Ошибка создания счета');
+          }
+        } catch (error) {
+          showNotification('Ошибка: ' + error.message, 'error');
+          throw error;
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      if (!currentUser) {
+        return <AuthScreen onLogin={handleLogin} />;
+      }
+
+      return (
+        <div className="min-h-screen bg-gray-50">
+          <Header user={currentUser} onLogout={handleLogout} onRefresh={loadData} lastUpdate={lastUpdate} loading={loading} />
+          <Tabs activeTab={activeTab} onChange={setActiveTab} />
+
+          {loading && invoices.length === 0 ? (
+            <div className="flex items-center justify-center py-20">
+              <div className="text-center">
+                <div className="spinner mx-auto mb-4"></div>
+                <div className="text-gray-600 text-sm">Загрузка...</div>
+              </div>
+            </div>
+          ) : (
+            <>
+              {activeTab === 'dashboard' && (
+                <Dashboard invoices={invoices} user={currentUser} onFilterByStatus={(status) => { setStatusFilter(status); setActiveTab('invoices'); }} />
+              )}
+              {activeTab === 'invoices' && (
+                <InvoicesView
+                  invoices={invoices}
+                  user={currentUser}
+                  onView={(inv) => { setViewModalInvoice(inv); setViewModalOpen(true); }}
+                  onAction={(inv, action) => { setActionModalInvoice(inv); setActionModalType(action); setActionModalOpen(true); }}
+                  onCreateNew={() => setCreateModalOpen(true)}
+                  selectedIds={selectedInvoiceIds}
+                  onSelectionChange={setSelectedInvoiceIds}
+                  initialStatusFilter={statusFilter}
+                />
+              )}
+            </>
+          )}
+
+          {notification && <Notification message={notification.message} type={notification.type} onClose={() => setNotification(null)} />}
+          <ViewInvoiceModal invoice={viewModalInvoice} isOpen={viewModalOpen} onClose={() => setViewModalOpen(false)} />
+          <ActionModal invoice={actionModalInvoice} action={actionModalType} isOpen={actionModalOpen} onClose={() => setActionModalOpen(false)} onConfirm={handleActionConfirm} loading={loading} />
+          <CreateInvoiceModal isOpen={createModalOpen} onClose={() => setCreateModalOpen(false)} onCreate={handleCreateInvoice} config={config} />
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
