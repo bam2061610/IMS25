@@ -436,10 +436,144 @@ function addComment(invoiceId, userInfo, commentText) {
     sheet.getRange(rowIndex, 31).setValue(JSON.stringify(currentComments)); // Column AE
     
     return { success: true };
-    
+  
   } catch (error) {
     Logger.log('❌ Error adding comment: ' + error);
     return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Ручное архивирование счета (только для администратора)
+ */
+function archiveInvoice(invoiceId, userInfo) {
+  if (!userInfo || !userInfo.permissions || userInfo.permissions.indexOf('all') === -1) {
+    return {
+      success: false,
+      error: 'Недостаточно прав. Только администраторы могут архивировать счета.'
+    };
+  }
+
+  const lock = LockService.getScriptLock();
+
+  try {
+    lock.waitLock(30000);
+
+    Logger.log('📦 Archiving invoice ' + invoiceId);
+
+    const sheet = getOrCreateSheet();
+    const data = sheet.getDataRange().getValues();
+
+    let rowIndex = -1;
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][0]) === String(invoiceId)) {
+        rowIndex = i + 1;
+        break;
+      }
+    }
+
+    if (rowIndex === -1) {
+      return { success: false, error: 'Счет не найден' };
+    }
+
+    sheet.getRange(rowIndex, COLUMN.ARCHIVED + 1).setValue(true); // Column AD: archived
+
+    try {
+      if (typeof logAction === 'function') {
+        logAction(
+          invoiceId,
+          userInfo,
+          'ARCHIVE',
+          data[rowIndex - 1][COLUMN.STATUS],
+          data[rowIndex - 1][COLUMN.STATUS],
+          'Счет архивирован вручную администратором'
+        );
+      }
+    } catch (logError) {
+      Logger.log('⚠️ Log warning: ' + logError);
+    }
+
+    Logger.log('✅ Invoice archived successfully');
+    return {
+      success: true,
+      message: 'Счет успешно архивирован'
+    };
+
+  } catch (error) {
+    Logger.log('❌ Error archiving invoice: ' + error);
+    return {
+      success: false,
+      error: error.message || 'Не удалось архивировать счет'
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Разархивирование счета (только для администратора)
+ */
+function unarchiveInvoice(invoiceId, userInfo) {
+  if (!userInfo || !userInfo.permissions || userInfo.permissions.indexOf('all') === -1) {
+    return {
+      success: false,
+      error: 'Недостаточно прав. Только администраторы могут разархивировать счета.'
+    };
+  }
+
+  const lock = LockService.getScriptLock();
+
+  try {
+    lock.waitLock(30000);
+
+    Logger.log('📤 Unarchiving invoice ' + invoiceId);
+
+    const sheet = getOrCreateSheet();
+    const data = sheet.getDataRange().getValues();
+
+    let rowIndex = -1;
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][0]) === String(invoiceId)) {
+        rowIndex = i + 1;
+        break;
+      }
+    }
+
+    if (rowIndex === -1) {
+      return { success: false, error: 'Счет не найден' };
+    }
+
+    sheet.getRange(rowIndex, COLUMN.ARCHIVED + 1).setValue(false); // Column AD: archived
+
+    try {
+      if (typeof logAction === 'function') {
+        logAction(
+          invoiceId,
+          userInfo,
+          'UNARCHIVE',
+          data[rowIndex - 1][COLUMN.STATUS],
+          data[rowIndex - 1][COLUMN.STATUS],
+          'Счет разархивирован администратором'
+        );
+      }
+    } catch (logError) {
+      Logger.log('⚠️ Log warning: ' + logError);
+    }
+
+    Logger.log('✅ Invoice unarchived successfully');
+    return {
+      success: true,
+      message: 'Счет успешно разархивирован'
+    };
+
+  } catch (error) {
+    Logger.log('❌ Error unarchiving invoice: ' + error);
+    return {
+      success: false,
+      error: error.message || 'Не удалось разархивировать счет'
+    };
+  } finally {
+    lock.releaseLock();
   }
 }
 
