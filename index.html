@@ -643,27 +643,27 @@
       const [sortBy, setSortBy] = useState('created_desc');
       const [viewMode, setViewMode] = useState('table'); // 'table' or 'cards'
       
-      const handleBulkArchive = async (archive) => {
+      const processBulkArchive = async (shouldArchive) => {
         if (selectedIds.length === 0) return;
-        if (!hasPermission(user, 'all')) {
-          onNotify && onNotify('Недостаточно прав для операции', 'error');
-          return;
-        }
         
-        const actionText = archive ? 'архивировать' : 'разархивировать';
-        if (!confirm(`Вы уверены, что хотите ${actionText} выбранные счета (${selectedIds.length} шт)?`)) {
+        const confirmMessage = shouldArchive
+          ? `Архивировать выбранные счета (${selectedIds.length} шт)?`
+          : `Разархивировать выбранные счета (${selectedIds.length} шт)?`;
+        
+        if (!confirm(confirmMessage)) {
           return;
         }
         
         try {
-          const result = archive
+          const result = shouldArchive
             ? await API.archiveMultipleInvoices(selectedIds, user)
             : await API.unarchiveMultipleInvoices(selectedIds, user);
           
           if (result.success) {
             onSelectionChange([]);
+            const count = shouldArchive ? result.archivedCount : result.unarchivedCount;
             onNotify && onNotify(
-              `${archive ? 'Архивировано' : 'Разархивировано'}: ${(archive ? result.archivedCount : result.unarchivedCount) || 0} счетов`,
+              `${shouldArchive ? 'Архивировано' : 'Разархивировано'}: ${count || 0} счетов`,
               'success'
             );
             if (result.errors && result.errors.length) {
@@ -677,6 +677,9 @@
           onNotify && onNotify('Ошибка: ' + error.message, 'error');
         }
       };
+      
+      const handleBulkArchive = () => processBulkArchive(true);
+      const handleBulkUnarchive = () => processBulkArchive(false);
 
       useEffect(() => {
         if (initialStatusFilter) {
@@ -802,8 +805,6 @@
       const isSupply = hasPermission(user, 'approve');
       const isFinance = hasPermission(user, 'confirm');
       const isCashier = hasPermission(user, 'pay');
-      const isInitiator = hasPermission(user, 'create');
-      const canBulkArchive = hasPermission(user, 'all');
       const hasActiveFilters = Boolean(searchTerm || statusFilter || creatorFilter || quickFilter || showArchived);
 
       return (
@@ -889,20 +890,20 @@
               </label>
 
               <div className="flex gap-2 sm:ml-auto">
-                {selectedIds.length > 0 && canBulkArchive && (
+                {selectedIds.length > 0 && (
                   <>
                     {!showArchived ? (
                       <button
-                        onClick={() => handleBulkArchive(true)}
-                        className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition font-medium flex items-center gap-2"
+                        onClick={handleBulkArchive}
+                        className="px-4 py-1.5 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition font-medium flex items-center gap-2 text-sm"
                         title="Архивировать выбранные"
                       >
                         📦 Архив ({selectedIds.length})
                       </button>
                     ) : (
                       <button
-                        onClick={() => handleBulkArchive(false)}
-                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium flex items-center gap-2"
+                        onClick={handleBulkUnarchive}
+                        className="px-4 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium flex items-center gap-2 text-sm"
                         title="Разархивировать выбранные"
                       >
                         📤 Вернуть ({selectedIds.length})

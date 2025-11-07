@@ -185,13 +185,14 @@ function saveInvoice(invoiceData) {
 
     // Prepare initial comment if provided
     let initialComments = '[]';
-    if (invoiceData.comment && String(invoiceData.comment).trim()) {
+    const trimmedInitialComment = invoiceData.comment ? String(invoiceData.comment).trim() : '';
+    if (trimmedInitialComment) {
       const commentObj = {
-        text: String(invoiceData.comment).trim(),
-        author: invoiceData.createdBy || 'Неизвестный пользователь',
-        timestamp: now,
-        role: invoiceData.createdByRole || 'инициатор',
-        stage: 'creation'
+        user: invoiceData.createdBy || 'Неизвестный пользователь',
+        timestamp: new Date().toISOString(),
+        text: trimmedInitialComment,
+        stage: 'создание',
+        role: invoiceData.createdByRole || 'инициатор'
       };
       initialComments = JSON.stringify([commentObj]);
     }
@@ -200,14 +201,14 @@ function saveInvoice(invoiceData) {
     const rowData = [
       newId,                                      // 1. id
       String(invoiceData.number || ''),           // 2. number
-      invoiceData.date || '',                     // 3. date
+      String(invoiceData.date || ''),             // 3. date
       String(invoiceData.company || ''),          // 4. company
       String(invoiceData.supplier || ''),         // 5. supplier
       String(invoiceData.supplierBIN || ''),      // 6. supplierBIN
       parseFloat(invoiceData.amount) || 0,        // 7. amount
       String(invoiceData.currency || 'KZT'),      // 8. currency
       String(invoiceData.purpose || ''),          // 9. purpose
-      invoiceData.dueDate || '',                  // 10. dueDate
+      String(invoiceData.dueDate || ''),          // 10. dueDate
       String(invoiceData.priority || 'Обычный'),  // 11. priority
       'pending',                                  // 12. status
       String(invoiceData.createdBy || ''),        // 13. createdBy
@@ -228,7 +229,7 @@ function saveInvoice(invoiceData) {
       '',                                         // 28. printedBy
       '',                                         // 29. printedAt
       false,                                      // 30. archived
-      initialComments                              // 31. comments (JSON)
+      initialComments                             // 31. comments (JSON)
     ];
     
     Logger.log('📝 Row data prepared: ' + rowData.length + ' columns');
@@ -310,6 +311,7 @@ function updateInvoiceStatus(invoiceId, newStatus, userInfo) {
     }
     
     const now = new Date().toLocaleString('ru-RU', {timeZone: 'Asia/Almaty'});
+    const trimmedUserComment = userInfo.comment ? String(userInfo.comment).trim() : '';
     let commentUpdatedDuringConfirmation = false;
     
     // ОТКЛОНЕНИЕ
@@ -347,29 +349,18 @@ function updateInvoiceStatus(invoiceId, newStatus, userInfo) {
         Logger.log('✅ First confirmation by ' + userInfo.name);
 
         // Add comment for first confirmation
-        const trimmedCommentFirst = userInfo.comment && userInfo.comment.trim();
-        if (trimmedCommentFirst) {
-          const currentComments = data[rowIndex-1][30] || '[]';
-          let commentsArray;
-          try {
-            commentsArray = JSON.parse(currentComments);
-            if (!Array.isArray(commentsArray)) {
-              commentsArray = [];
-            }
-          } catch (e) {
-            commentsArray = [];
-          }
-          
+        if (trimmedUserComment) {
+          const currentComments = parseComments(data[rowIndex-1][30]);
           const newComment = {
-            text: trimmedCommentFirst,
-            author: userInfo.name,
-            timestamp: now,
-            role: userInfo.role || 'сотрудник',
-            stage: 'подтверждение (1/2)'
+            user: userInfo.name,
+            timestamp: new Date().toISOString(),
+            text: trimmedUserComment,
+            stage: 'подтверждение (1/2)',
+            role: userInfo.role || ''
           };
           
-          commentsArray.push(newComment);
-          sheet.getRange(rowIndex, 31).setValue(JSON.stringify(commentsArray));
+          currentComments.push(newComment);
+          sheet.getRange(rowIndex, 31).setValue(JSON.stringify(currentComments));
           commentUpdatedDuringConfirmation = true;
         }
         
@@ -382,29 +373,18 @@ function updateInvoiceStatus(invoiceId, newStatus, userInfo) {
         Logger.log('✅ Second confirmation by ' + userInfo.name);
 
         // Add comment for second confirmation
-        const trimmedCommentSecond = userInfo.comment && userInfo.comment.trim();
-        if (trimmedCommentSecond) {
-          const currentComments = data[rowIndex-1][30] || '[]';
-          let commentsArray;
-          try {
-            commentsArray = JSON.parse(currentComments);
-            if (!Array.isArray(commentsArray)) {
-              commentsArray = [];
-            }
-          } catch (e) {
-            commentsArray = [];
-          }
-          
+        if (trimmedUserComment) {
+          const currentComments = parseComments(data[rowIndex-1][30]);
           const newComment = {
-            text: trimmedCommentSecond,
-            author: userInfo.name,
-            timestamp: now,
-            role: userInfo.role || 'сотрудник',
-            stage: 'подтверждение (2/2)'
+            user: userInfo.name,
+            timestamp: new Date().toISOString(),
+            text: trimmedUserComment,
+            stage: 'подтверждение (2/2)',
+            role: userInfo.role || ''
           };
           
-          commentsArray.push(newComment);
-          sheet.getRange(rowIndex, 31).setValue(JSON.stringify(commentsArray));
+          currentComments.push(newComment);
+          sheet.getRange(rowIndex, 31).setValue(JSON.stringify(currentComments));
           commentUpdatedDuringConfirmation = true;
         }
         
@@ -430,38 +410,28 @@ function updateInvoiceStatus(invoiceId, newStatus, userInfo) {
       formatRow(sheet, rowIndex, newStatus);
     }
 
-    // Add comment if provided
-    const trimmedUserComment = userInfo.comment && userInfo.comment.trim();
+    // Add comment if provided (for all other statuses)
     if (!commentUpdatedDuringConfirmation && trimmedUserComment) {
-      const currentComments = data[rowIndex-1][30] || '[]';
-      let commentsArray;
-      try {
-        commentsArray = JSON.parse(currentComments);
-        if (!Array.isArray(commentsArray)) {
-          commentsArray = [];
-        }
-      } catch (e) {
-        commentsArray = [];
-      }
+      const currentComments = parseComments(data[rowIndex-1][30]);
       
       const stageName = {
-        'approved': 'согласование',
-        'partial_confirmed': 'подтверждение (1/2)',
-        'confirmed': 'подтверждение (2/2)',
-        'paid': 'оплата',
-        'rejected': 'отклонение'
-      }[newStatus] || 'действие';
+        approved: 'согласование',
+        partial_confirmed: 'подтверждение (1/2)',
+        confirmed: 'подтверждение (2/2)',
+        paid: 'оплата',
+        rejected: 'отклонение'
+      }[newStatus] || newStatus;
       
       const newComment = {
+        user: userInfo.name,
+        timestamp: new Date().toISOString(),
         text: trimmedUserComment,
-        author: userInfo.name,
-        timestamp: now,
-        role: userInfo.role || 'сотрудник',
-        stage: stageName
+        stage: stageName,
+        role: userInfo.role || ''
       };
       
-      commentsArray.push(newComment);
-      sheet.getRange(rowIndex, 31).setValue(JSON.stringify(commentsArray));
+      currentComments.push(newComment);
+      sheet.getRange(rowIndex, 31).setValue(JSON.stringify(currentComments));
     }
     
     Logger.log('✅ Status updated successfully');
@@ -500,7 +470,7 @@ function addCommentToInvoice(invoiceId, commentText, userInfo) {
       return { success: false, error: 'Счет не найден' };
     }
     
-    const now = new Date().toLocaleString('ru-RU', {timeZone: 'Asia/Almaty'});
+    const timestampIso = new Date().toISOString();
     const currentComments = data[rowIndex-1][30] || '[]'; // Column AE (index 30)
     
     let commentsArray;
@@ -515,8 +485,9 @@ function addCommentToInvoice(invoiceId, commentText, userInfo) {
     
     const newComment = {
       text: trimmedComment,
+      user: authorName,
       author: authorName,
-      timestamp: now,
+      timestamp: timestampIso,
       role: userRole
     };
     
@@ -536,10 +507,6 @@ function addCommentToInvoice(invoiceId, commentText, userInfo) {
 // Archive multiple invoices
 function archiveMultipleInvoices(invoiceIds, userInfo) {
   try {
-    if (!userInfo || !userInfo.permissions || userInfo.permissions.indexOf('all') === -1) {
-      return { success: false, error: 'Недостаточно прав для архивирования' };
-    }
-    
     const sheet = getOrCreateSheet();
     const data = sheet.getDataRange().getValues();
     
@@ -560,12 +527,13 @@ function archiveMultipleInvoices(invoiceIds, userInfo) {
         continue;
       }
       
+      // Check if already archived
       if (data[rowIndex-1][29]) {
         errors.push('Счет ' + id + ' уже в архиве');
         continue;
       }
       
-      sheet.getRange(rowIndex, COLUMN.ARCHIVED + 1).setValue(true); // Column AD (archived)
+      sheet.getRange(rowIndex, 30).setValue(true); // Column AD (archived)
       archivedCount++;
     }
     
@@ -586,10 +554,6 @@ function archiveMultipleInvoices(invoiceIds, userInfo) {
 // Unarchive multiple invoices
 function unarchiveMultipleInvoices(invoiceIds, userInfo) {
   try {
-    if (!userInfo || !userInfo.permissions || userInfo.permissions.indexOf('all') === -1) {
-      return { success: false, error: 'Недостаточно прав для разархивирования' };
-    }
-    
     const sheet = getOrCreateSheet();
     const data = sheet.getDataRange().getValues();
     
@@ -610,7 +574,7 @@ function unarchiveMultipleInvoices(invoiceIds, userInfo) {
         continue;
       }
       
-      sheet.getRange(rowIndex, COLUMN.ARCHIVED + 1).setValue(false); // Column AD (archived)
+      sheet.getRange(rowIndex, 30).setValue(false); // Column AD (archived)
       unarchivedCount++;
     }
     
