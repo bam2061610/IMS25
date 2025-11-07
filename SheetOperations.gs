@@ -182,6 +182,19 @@ function saveInvoice(invoiceData) {
     const newId = maxId + 1;
     
     const now = new Date().toLocaleString('ru-RU', {timeZone: 'Asia/Almaty'});
+
+    // Prepare initial comment if provided
+    let initialComments = '[]';
+    if (invoiceData.comment && String(invoiceData.comment).trim()) {
+      const commentObj = {
+        text: String(invoiceData.comment).trim(),
+        author: invoiceData.createdBy || 'Неизвестный пользователь',
+        timestamp: now,
+        role: invoiceData.createdByRole || 'инициатор',
+        stage: 'creation'
+      };
+      initialComments = JSON.stringify([commentObj]);
+    }
     
     // Prepare row data (31 columns to match headers)
     const rowData = [
@@ -215,7 +228,7 @@ function saveInvoice(invoiceData) {
       '',                                         // 28. printedBy
       '',                                         // 29. printedAt
       false,                                      // 30. archived
-      ''                                          // 31. comments (JSON)
+      initialComments                              // 31. comments (JSON)
     ];
     
     Logger.log('📝 Row data prepared: ' + rowData.length + ' columns');
@@ -297,6 +310,7 @@ function updateInvoiceStatus(invoiceId, newStatus, userInfo) {
     }
     
     const now = new Date().toLocaleString('ru-RU', {timeZone: 'Asia/Almaty'});
+    let commentUpdatedDuringConfirmation = false;
     
     // ОТКЛОНЕНИЕ
     if (newStatus === 'rejected') {
@@ -331,6 +345,33 @@ function updateInvoiceStatus(invoiceId, newStatus, userInfo) {
         sheet.getRange(rowIndex, 12).setValue('partial_confirmed');
         formatRow(sheet, rowIndex, 'partial_confirmed');
         Logger.log('✅ First confirmation by ' + userInfo.name);
+
+        // Add comment for first confirmation
+        const trimmedCommentFirst = userInfo.comment && userInfo.comment.trim();
+        if (trimmedCommentFirst) {
+          const currentComments = data[rowIndex-1][30] || '[]';
+          let commentsArray;
+          try {
+            commentsArray = JSON.parse(currentComments);
+            if (!Array.isArray(commentsArray)) {
+              commentsArray = [];
+            }
+          } catch (e) {
+            commentsArray = [];
+          }
+          
+          const newComment = {
+            text: trimmedCommentFirst,
+            author: userInfo.name,
+            timestamp: now,
+            role: userInfo.role || 'сотрудник',
+            stage: 'подтверждение (1/2)'
+          };
+          
+          commentsArray.push(newComment);
+          sheet.getRange(rowIndex, 31).setValue(JSON.stringify(commentsArray));
+          commentUpdatedDuringConfirmation = true;
+        }
         
       // Второе подтверждение
       } else if (!data[rowIndex-1][18]) {
@@ -339,6 +380,33 @@ function updateInvoiceStatus(invoiceId, newStatus, userInfo) {
         sheet.getRange(rowIndex, 12).setValue('confirmed');
         formatRow(sheet, rowIndex, 'confirmed');
         Logger.log('✅ Second confirmation by ' + userInfo.name);
+
+        // Add comment for second confirmation
+        const trimmedCommentSecond = userInfo.comment && userInfo.comment.trim();
+        if (trimmedCommentSecond) {
+          const currentComments = data[rowIndex-1][30] || '[]';
+          let commentsArray;
+          try {
+            commentsArray = JSON.parse(currentComments);
+            if (!Array.isArray(commentsArray)) {
+              commentsArray = [];
+            }
+          } catch (e) {
+            commentsArray = [];
+          }
+          
+          const newComment = {
+            text: trimmedCommentSecond,
+            author: userInfo.name,
+            timestamp: now,
+            role: userInfo.role || 'сотрудник',
+            stage: 'подтверждение (2/2)'
+          };
+          
+          commentsArray.push(newComment);
+          sheet.getRange(rowIndex, 31).setValue(JSON.stringify(commentsArray));
+          commentUpdatedDuringConfirmation = true;
+        }
         
       } else {
         return { success: false, error: 'Счет уже полностью подтвержден' };
@@ -361,6 +429,40 @@ function updateInvoiceStatus(invoiceId, newStatus, userInfo) {
       
       formatRow(sheet, rowIndex, newStatus);
     }
+
+    // Add comment if provided
+    const trimmedUserComment = userInfo.comment && userInfo.comment.trim();
+    if (!commentUpdatedDuringConfirmation && trimmedUserComment) {
+      const currentComments = data[rowIndex-1][30] || '[]';
+      let commentsArray;
+      try {
+        commentsArray = JSON.parse(currentComments);
+        if (!Array.isArray(commentsArray)) {
+          commentsArray = [];
+        }
+      } catch (e) {
+        commentsArray = [];
+      }
+      
+      const stageName = {
+        'approved': 'согласование',
+        'partial_confirmed': 'подтверждение (1/2)',
+        'confirmed': 'подтверждение (2/2)',
+        'paid': 'оплата',
+        'rejected': 'отклонение'
+      }[newStatus] || 'действие';
+      
+      const newComment = {
+        text: trimmedUserComment,
+        author: userInfo.name,
+        timestamp: now,
+        role: userInfo.role || 'сотрудник',
+        stage: stageName
+      };
+      
+      commentsArray.push(newComment);
+      sheet.getRange(rowIndex, 31).setValue(JSON.stringify(commentsArray));
+    }
     
     Logger.log('✅ Status updated successfully');
     return { success: true };
@@ -373,11 +475,18 @@ function updateInvoiceStatus(invoiceId, newStatus, userInfo) {
   }
 }
 
-// Mark invoice as printed
-function markInvoicePrinted(invoiceId, userInfo) {
+// Add comment to invoice
+function addCommentToInvoice(invoiceId, commentText, userInfo) {
   try {
     const sheet = getOrCreateSheet();
     const data = sheet.getDataRange().getValues();
+    const trimmedComment = commentText ? String(commentText).trim() : '';
+    const authorName = userInfo && userInfo.name ? userInfo.name : 'Неизвестный пользователь';
+    const userRole = userInfo && userInfo.role ? userInfo.role : 'сотрудник';
+    
+    if (!trimmedComment) {
+      return { success: false, error: 'Комментарий не может быть пустым' };
+    }
     
     let rowIndex = -1;
     for (let i = 1; i < data.length; i++) {
@@ -388,57 +497,133 @@ function markInvoicePrinted(invoiceId, userInfo) {
     }
     
     if (rowIndex === -1) {
-      return { success: false, error: 'Invoice not found' };
+      return { success: false, error: 'Счет не найден' };
     }
     
     const now = new Date().toLocaleString('ru-RU', {timeZone: 'Asia/Almaty'});
+    const currentComments = data[rowIndex-1][30] || '[]'; // Column AE (index 30)
     
-    sheet.getRange(rowIndex, 27).setValue(true);           // Column AA (printed)
-    sheet.getRange(rowIndex, 28).setValue(userInfo.name);  // Column AB (printedBy)
-    sheet.getRange(rowIndex, 29).setValue(now);            // Column AC (printedAt)
+    let commentsArray;
+    try {
+      commentsArray = JSON.parse(currentComments);
+      if (!Array.isArray(commentsArray)) {
+        commentsArray = [];
+      }
+    } catch (e) {
+      commentsArray = [];
+    }
     
+    const newComment = {
+      text: trimmedComment,
+      author: authorName,
+      timestamp: now,
+      role: userRole
+    };
+    
+    commentsArray.push(newComment);
+    
+    sheet.getRange(rowIndex, 31).setValue(JSON.stringify(commentsArray)); // Column AE
+    
+    Logger.log('✅ Comment added successfully');
     return { success: true };
     
   } catch (error) {
-    Logger.log('❌ Error marking printed: ' + error);
+    Logger.log('❌ Error adding comment: ' + error);
     return { success: false, error: error.message };
   }
 }
 
-// Add comment to invoice
-function addComment(invoiceId, userInfo, commentText) {
+// Archive multiple invoices
+function archiveMultipleInvoices(invoiceIds, userInfo) {
   try {
+    if (!userInfo || !userInfo.permissions || userInfo.permissions.indexOf('all') === -1) {
+      return { success: false, error: 'Недостаточно прав для архивирования' };
+    }
+    
     const sheet = getOrCreateSheet();
     const data = sheet.getDataRange().getValues();
     
-    let rowIndex = -1;
-    for (let i = 1; i < data.length; i++) {
-      if (String(data[i][0]) === String(invoiceId)) {
-        rowIndex = i + 1;
-        break;
+    let archivedCount = 0;
+    let errors = [];
+    
+    for (let id of invoiceIds) {
+      let rowIndex = -1;
+      for (let i = 1; i < data.length; i++) {
+        if (String(data[i][0]) === String(id)) {
+          rowIndex = i + 1;
+          break;
+        }
       }
+      
+      if (rowIndex === -1) {
+        errors.push('Счет ' + id + ' не найден');
+        continue;
+      }
+      
+      if (data[rowIndex-1][29]) {
+        errors.push('Счет ' + id + ' уже в архиве');
+        continue;
+      }
+      
+      sheet.getRange(rowIndex, COLUMN.ARCHIVED + 1).setValue(true); // Column AD (archived)
+      archivedCount++;
     }
     
-    if (rowIndex === -1) {
-      return { success: false, error: 'Invoice not found' };
-    }
+    Logger.log('✅ Archived ' + archivedCount + ' invoices');
     
-    const currentComments = parseComments(data[rowIndex-1][30]);
-    
-    const newComment = {
-      user: userInfo.name,
-      timestamp: new Date().toISOString(),
-      text: commentText
+    return { 
+      success: true, 
+      archivedCount: archivedCount,
+      errors: errors.length > 0 ? errors : null
     };
     
-    currentComments.push(newComment);
-    
-    sheet.getRange(rowIndex, 31).setValue(JSON.stringify(currentComments)); // Column AE
-    
-    return { success: true };
-  
   } catch (error) {
-    Logger.log('❌ Error adding comment: ' + error);
+    Logger.log('❌ Error archiving invoices: ' + error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Unarchive multiple invoices
+function unarchiveMultipleInvoices(invoiceIds, userInfo) {
+  try {
+    if (!userInfo || !userInfo.permissions || userInfo.permissions.indexOf('all') === -1) {
+      return { success: false, error: 'Недостаточно прав для разархивирования' };
+    }
+    
+    const sheet = getOrCreateSheet();
+    const data = sheet.getDataRange().getValues();
+    
+    let unarchivedCount = 0;
+    let errors = [];
+    
+    for (let id of invoiceIds) {
+      let rowIndex = -1;
+      for (let i = 1; i < data.length; i++) {
+        if (String(data[i][0]) === String(id)) {
+          rowIndex = i + 1;
+          break;
+        }
+      }
+      
+      if (rowIndex === -1) {
+        errors.push('Счет ' + id + ' не найден');
+        continue;
+      }
+      
+      sheet.getRange(rowIndex, COLUMN.ARCHIVED + 1).setValue(false); // Column AD (archived)
+      unarchivedCount++;
+    }
+    
+    Logger.log('✅ Unarchived ' + unarchivedCount + ' invoices');
+    
+    return { 
+      success: true, 
+      unarchivedCount: unarchivedCount,
+      errors: errors.length > 0 ? errors : null
+    };
+    
+  } catch (error) {
+    Logger.log('❌ Error unarchiving invoices: ' + error);
     return { success: false, error: error.message };
   }
 }
