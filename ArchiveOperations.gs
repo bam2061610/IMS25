@@ -76,11 +76,6 @@ function moveInvoiceToArchive(invoiceId, userInfo) {
     const nextArchiveRow = archiveSheet.getLastRow() + 1;
     archiveSheet.getRange(nextArchiveRow, 1, 1, rowData.length).setValues([rowData]);
     
-    // Скопировать форматирование
-    const sourceRange = invoicesSheet.getRange(rowIndex, 1, 1, rowData.length);
-    const targetRange = archiveSheet.getRange(nextArchiveRow, 1, 1, rowData.length);
-    sourceRange.copyFormatTo(targetRange);
-    
     // Удалить строку из Invoices
     invoicesSheet.deleteRow(rowIndex);
     
@@ -178,11 +173,6 @@ function autoArchiveOldInvoices() {
         // Добавить строку в ARCH
         const nextArchiveRow = archiveSheet.getLastRow() + 1;
         archiveSheet.getRange(nextArchiveRow, 1, 1, row.length).setValues([row]);
-        
-        // Скопировать форматирование
-        const sourceRange = invoicesSheet.getRange(i + 1, 1, 1, row.length);
-        const targetRange = archiveSheet.getRange(nextArchiveRow, 1, 1, row.length);
-        sourceRange.copyFormatTo(targetRange);
         
         // Запомнить индекс для удаления
         rowsToDelete.push(i + 1); // +1 потому что строки начинаются с 1
