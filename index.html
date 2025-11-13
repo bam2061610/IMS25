@@ -353,48 +353,6 @@
       return dueDate < today;
     }
 
-    function getPriorityStyle(priority) {
-      const styles = {
-        'Срочно': {
-          border: 'border-red-600 border-4',
-          bg: 'bg-red-50',
-          badge: 'bg-red-600 text-white font-bold shadow-lg',
-          icon: <Icons.Flame size="lg" className="text-red-600" />,
-          pulse: 'animate-pulse'
-        },
-        'Высокий': {
-          border: 'border-orange-500 border-2',
-          bg: 'bg-orange-50',
-          badge: 'bg-orange-500 text-white font-bold shadow-md',
-          icon: <Icons.Zap size="lg" className="text-orange-500" />,
-          pulse: ''
-        },
-        'Обычный': {
-          border: 'border-gray-200 border-2',
-          bg: 'bg-white',
-          badge: 'bg-gray-400 text-white',
-          icon: <Icons.FileText size="md" className="text-gray-400" />,
-          pulse: ''
-        }
-      };
-      return styles[priority] || styles['Обычный'];
-    }
-
-    function getStatusIcon(status, size = 'md') {
-      const iconProps = { size, className: 'inline' };
-
-      const icons = {
-        [INVOICE_STATUS.PENDING]: <Icons.Clock {...iconProps} />,
-        [INVOICE_STATUS.APPROVED]: <Icons.CheckCircle {...iconProps} />,
-        [INVOICE_STATUS.PARTIAL_CONFIRMED]: <Icons.Zap {...iconProps} />,
-        [INVOICE_STATUS.CONFIRMED]: <Icons.DollarSign {...iconProps} />,
-        [INVOICE_STATUS.PAID]: <Icons.CreditCard {...iconProps} />,
-        [INVOICE_STATUS.REJECTED]: <Icons.XCircle {...iconProps} />
-      };
-
-      return icons[status] || <Icons.FileText {...iconProps} />;
-    }
-
     function formatAmount(amount, currency) {
       if (!amount && amount !== 0) return '0.00';
       const formatted = new Intl.NumberFormat('ru-RU', {
@@ -1036,9 +994,6 @@
 
         const sorted = [...filtered];
         sorted.sort((a, b) => {
-          const priorityDiff = (priorityOrder[a.priority] ?? 2) - (priorityOrder[b.priority] ?? 2);
-          if (priorityDiff !== 0) return priorityDiff;
-
           const safeDate = (value) => {
             const date = new Date(value || 0);
             return isNaN(date) ? new Date(0) : date;
@@ -1048,6 +1003,13 @@
             const num = Number(value);
             return isNaN(num) ? 0 : num;
           };
+
+          const isExplicitSort = ['created_desc', 'created_asc', 'amount_desc', 'amount_asc', 'date_desc', 'date_asc'].includes(sortBy);
+
+          if (!isExplicitSort) {
+            const priorityDiff = (priorityOrder[a.priority] ?? 2) - (priorityOrder[b.priority] ?? 2);
+            if (priorityDiff !== 0) return priorityDiff;
+          }
 
           switch (sortBy) {
             case 'date_asc':
@@ -1059,11 +1021,11 @@
             case 'amount_desc':
               return safeAmount(b.amount) - safeAmount(a.amount);
             case 'created_asc':
-              // СТАРЫЕ: от первого к последнему (по дате создания)
+              // СТАРЫЕ: самый первый → самый последний
               return safeDate(a.createdAt) - safeDate(b.createdAt);
             case 'created_desc':
             default:
-              // НОВЫЕ: от последнего к первому (по дате создания)
+              // НОВЫЕ: самый последний → самый первый
               return safeDate(b.createdAt) - safeDate(a.createdAt);
           }
         });
@@ -1349,9 +1311,23 @@
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-sm font-semibold text-orhun-dark">Активные фильтры:</span>
 
-                {statusFilter && (
+                {statusFilter === 'my_confirmation' && (
+                  <span className="px-3 py-1 bg-cyan-600 text-white rounded-full text-xs flex items-center gap-2">
+                    <Icons.DollarSign size="xs" className="text-white" />
+                    <span>Требует моего подтверждения</span>
+                    <button
+                      onClick={() => setStatusFilter('')}
+                      className="hover:bg-cyan-700 rounded-full w-4 h-4 flex items-center justify-center"
+                    >
+                      <Icons.X size="xs" />
+                    </button>
+                  </span>
+                )}
+
+                {statusFilter && statusFilter !== 'my_confirmation' && (
                   <span className="px-3 py-1 bg-orhun-teal text-white rounded-full text-xs flex items-center gap-2">
-                    Статус: {STATUS_LABELS[statusFilter] || statusFilter}
+                    <Icons.FileText size="xs" className="text-white" />
+                    <span>{STATUS_LABELS[statusFilter]}</span>
                     <button
                       onClick={() => setStatusFilter('')}
                       className="hover:bg-cyan-600 rounded-full w-4 h-4 flex items-center justify-center"
@@ -1594,139 +1570,161 @@
               ((inv.status === INVOICE_STATUS.APPROVED || inv.status === INVOICE_STATUS.PARTIAL_CONFIRMED) && hasPermission(user, 'confirm')) ||
               (inv.status === INVOICE_STATUS.CONFIRMED && hasPermission(user, 'pay'))
             );
-            const priorityStyle = getPriorityStyle(inv.priority);
-            const statusTextClass = (STATUS_COLORS[inv.status] || '').split(' ').find(cls => cls.startsWith('text-')) || 'text-gray-600';
             const commentCount = inv.comments ? inv.comments.length : 0;
             const isInvoiceOverdue = isOverdue(inv.dueDate) && inv.status !== INVOICE_STATUS.PAID && inv.status !== INVOICE_STATUS.REJECTED;
             const isSelected = selectedIds.includes(inv.id);
+            const isUrgent = inv.priority === 'Срочно';
+            const isHighPriority = inv.priority === 'Высокий';
+            const cardBorderClass = isSelected
+              ? 'border-orhun-teal ring-2 ring-orhun-teal/20'
+              : isUrgent
+                ? 'border-red-300'
+                : isHighPriority
+                  ? 'border-yellow-300'
+                  : 'border-gray-200';
 
             return (
               <div
                 key={inv.id}
-                className={`rounded-xl shadow-sm p-4 card-hover relative ${priorityStyle.border} ${priorityStyle.bg} ${
-                  isSelected ? 'ring-4 ring-orhun-teal ring-offset-2' : ''
-                }`}
+                className={`relative bg-white rounded-xl shadow-sm border-2 p-5 card-hover transition-all ${cardBorderClass}`}
               >
-                {commentCount > 0 && (
-                  <div className="absolute -top-2 -right-2 bg-purple-600 text-white rounded-full w-10 h-10 flex items-center justify-center shadow-lg z-10 animate-pulse">
-                    <div className="flex flex-col items-center">
-                      <Icons.MessageCircle size="sm" />
-                      <span className="text-xs font-bold">{commentCount}</span>
-                    </div>
+                {hasPermission(user, 'all') && (
+                  <div className="absolute top-3 left-3">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => handleSelectOne(inv.id)}
+                      className="w-5 h-5 text-orhun-teal rounded border-gray-300 focus:ring-orhun-teal cursor-pointer"
+                    />
                   </div>
                 )}
 
-                <div className="flex justify-between items-start mb-3">
-                  <span className={`px-3 py-1 rounded-full text-xs uppercase tracking-wide ${priorityStyle.badge} ${priorityStyle.pulse}`}>
-                    {priorityStyle.icon} {inv.priority}
-                  </span>
-                  <span className={`text-xl ${statusTextClass}`}>
-                    {getStatusIcon(inv.status)}
-                  </span>
+                {inv.priority !== 'Обычный' && (
+                  <div className="absolute top-3 right-3">
+                    <span
+                      className={`px-2 py-1 rounded-full text-xs font-bold ${
+                        isUrgent
+                          ? 'bg-red-100 text-red-700 border border-red-300'
+                          : 'bg-yellow-100 text-yellow-700 border border-yellow-300'
+                      }`}
+                    >
+                      {isUrgent ? '🔥 СРОЧНО' : '⚡ ВАЖНО'}
+                    </span>
+                  </div>
+                )}
+
+                <div className="mt-8 mb-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-lg font-bold text-gray-900">№ {inv.number}</span>
+                    <span className={`px-3 py-1 rounded-lg text-xs font-medium border-2 ${STATUS_COLORS[inv.status]}`}>
+                      {STATUS_LABELS[inv.status]}
+                    </span>
+                  </div>
+
+                  {isInvoiceOverdue && (
+                    <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 flex items-center gap-2 mb-3">
+                      <Icons.AlertCircle size="sm" className="text-red-600 animate-pulse" />
+                      <span className="text-xs font-bold text-red-700">ПРОСРОЧЕН</span>
+                    </div>
+                  )}
                 </div>
 
-                <div className="flex items-start gap-3 mb-3">
-                  <input
-                    type="checkbox"
-                    checked={isSelected}
-                    onChange={() => handleSelectOne(inv.id)}
-                    className="mt-1 w-4 h-4 text-orhun-teal rounded"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-2">
-                      <h3 className="text-lg font-bold text-gray-900 truncate">№{inv.number}</h3>
-                      <span className={`px-2 py-0.5 rounded text-xs font-medium border ${STATUS_COLORS[inv.status]}`}>
-                        {STATUS_LABELS[inv.status]}
-                      </span>
-                    </div>
-                    <div className="text-sm text-gray-600 truncate mb-1">{inv.company}</div>
-                    <div className="text-sm text-gray-600">
-                      <div className="truncate">{inv.supplier}</div>
-                      {inv.supplierBIN && (
-                        <div className="text-xs text-gray-500 mt-1 font-mono">
-                          БИН: {inv.supplierBIN}
-                        </div>
-                      )}
-                    </div>
-                    <div className="text-xl font-bold text-orhun-dark mt-3 mb-3">
-                      {formatAmount(inv.amount, inv.currency)}
-                    </div>
-                    <div className="text-xs text-gray-600 space-y-1 bg-gray-50 rounded p-2">
-                      <div className="flex items-center gap-1">
-                        <Icons.FileEdit size="xs" />
-                        <span>Создан:</span>
-                        <span className="font-medium">{formatDate(inv.createdAt)}</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <Icons.FileText size="xs" />
-                        <span>Счет от:</span>
-                        <span className="font-medium">{formatDate(inv.date)}</span>
-                      </div>
-                      <div className={`flex items-center gap-1 ${isInvoiceOverdue ? 'text-red-600 font-bold' : ''}`}>
-                        <Icons.CreditCard size="xs" />
-                        <span>Оплата до:</span>
-                        <span className="font-medium">{formatDate(inv.dueDate)}</span>
-                        {isInvoiceOverdue && <Icons.AlertCircle size="xs" className="animate-pulse" />}
-                      </div>
-                    </div>
+                <div className="space-y-3 mb-4">
+                  <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                    <div className="text-xs text-gray-500 mb-1">Компания</div>
+                    <div className="font-semibold text-gray-900 truncate">{inv.company}</div>
+                  </div>
+
+                  <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                    <div className="text-xs text-gray-500 mb-1">Поставщик</div>
+                    <div className="font-semibold text-gray-900 truncate">{inv.supplier}</div>
+                    {inv.supplierBIN && (
+                      <div className="text-xs text-gray-600 mt-1 font-mono">БИН: {inv.supplierBIN}</div>
+                    )}
+                  </div>
+
+                  <div className="bg-gradient-to-br from-orhun-teal/10 to-cyan-50 rounded-lg p-4 border-2 border-orhun-teal/30">
+                    <div className="text-xs text-gray-600 mb-1">Сумма к оплате</div>
+                    <div className="text-2xl font-bold text-orhun-dark">{formatAmount(inv.amount, inv.currency)}</div>
                   </div>
                 </div>
+
+                <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 space-y-2 mb-4">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-gray-600">Создан:</span>
+                    <span className="font-semibold text-gray-900">{formatDate(inv.createdAt)}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-gray-600">Счет от:</span>
+                    <span className="font-semibold text-gray-900">{formatDate(inv.date)}</span>
+                  </div>
+                  <div className={`flex items-center justify-between text-xs ${isInvoiceOverdue ? 'text-red-600 font-bold' : ''}`}>
+                    <span>Оплата до:</span>
+                    <span className="font-semibold">{formatDate(inv.dueDate)}</span>
+                  </div>
+                </div>
+
+                {commentCount > 0 && (
+                  <div className="bg-purple-50 border border-purple-200 rounded-lg px-3 py-2 mb-3 flex items-center gap-2">
+                    <Icons.MessageCircle size="sm" className="text-purple-600" />
+                    <span className="text-xs font-semibold text-purple-700">Комментариев: {commentCount}</span>
+                  </div>
+                )}
 
                 <div className="flex flex-col gap-2">
                   <button
                     onClick={() => onView(inv)}
-                    className="w-full px-3 py-2 bg-orhun-teal text-white rounded-lg hover:bg-cyan-600 text-sm font-medium transition btn-apple"
+                    className="w-full px-4 py-2 bg-orhun-teal text-white rounded-lg hover:bg-cyan-600 font-medium transition text-sm"
                   >
                     Просмотр
                   </button>
-                  <button
-                    onClick={() => onAddComment && onAddComment(inv)}
-                    className="w-full px-4 py-3 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-lg hover:from-purple-700 hover:to-pink-700 font-bold shadow-lg flex items-center justify-center gap-2 transition transform hover:scale-105"
-                  >
-                    <Icons.MessageCircle size="md" />
-                    <span>Добавить комментарий</span>
-                    {commentCount > 0 && (
-                      <span className="bg-white text-purple-600 px-2 py-1 rounded-full text-xs font-bold ml-1">
-                        {commentCount}
-                      </span>
-                    )}
-                  </button>
 
-                  <div className="flex gap-2 flex-wrap">
-                    {canApprove && (
-                      <button
-                        onClick={() => onAction(inv, 'approve')}
-                        className="px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium transition btn-apple"
-                      >
-                        <Icons.Check size="sm" />
-                      </button>
-                    )}
-                    {canConfirm && (
-                      <button
-                        onClick={() => onAction(inv, 'confirm')}
-                        className="px-3 py-2 bg-orhun-teal text-white rounded-lg hover:bg-cyan-600 text-sm font-medium transition btn-apple"
-                      >
-                        <Icons.DollarSign size="sm" />
-                      </button>
-                    )}
-                    {canPay && (
-                      <button
-                        onClick={() => onAction(inv, 'pay')}
-                        className="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium transition btn-apple"
-                      >
-                        <Icons.CreditCard size="sm" />
-                      </button>
-                    )}
-                    {canReject && (
-                      <button
-                        onClick={() => onAction(inv, 'reject')}
-                        className="px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-medium transition btn-apple"
-                      >
-                        <Icons.X size="sm" />
-                      </button>
-                    )}
-                  </div>
+                  {onAddComment && (
+                    <button
+                      onClick={() => onAddComment(inv)}
+                      className="w-full px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-medium transition text-sm flex items-center justify-center gap-2"
+                    >
+                      <Icons.MessageCircle size="sm" className="text-white" />
+                      <span>Добавить комментарий</span>
+                    </button>
+                  )}
 
+                  {(canApprove || canConfirm || canPay || canReject) && (
+                    <div className="grid grid-cols-2 gap-2">
+                      {canApprove && (
+                        <button
+                          onClick={() => onAction(inv, 'approve')}
+                          className="px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-xs font-medium"
+                        >
+                          ✓ Согласовать
+                        </button>
+                      )}
+                      {canConfirm && (
+                        <button
+                          onClick={() => onAction(inv, 'confirm')}
+                          className="px-3 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 text-xs font-medium"
+                        >
+                          $ Подтвердить
+                        </button>
+                      )}
+                      {canPay && (
+                        <button
+                          onClick={() => onAction(inv, 'pay')}
+                          className="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-xs font-medium"
+                        >
+                          💳 Оплатить
+                        </button>
+                      )}
+                      {canReject && (
+                        <button
+                          onClick={() => onAction(inv, 'reject')}
+                          className="px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-xs font-medium"
+                        >
+                          ✕ Отклонить
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             );
