@@ -281,13 +281,6 @@
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </Icon>
       ),
-      Info: (props) => (
-        <Icon {...props}>
-          <circle cx="12" cy="12" r="10" strokeWidth={2} />
-          <line x1="12" y1="16" x2="12" y2="12" strokeWidth={2} strokeLinecap="round" />
-          <line x1="12" y1="8" x2="12.01" y2="8" strokeWidth={2} strokeLinecap="round" />
-        </Icon>
-      ),
       FileEdit: (props) => (
         <Icon {...props}>
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -487,6 +480,12 @@
           .withSuccessHandler(resolve)
           .withFailureHandler(reject)
           .updateSystemSetting(key, value, userInfo);
+      }),
+      getArchivedInvoices: () => new Promise((resolve, reject) => {
+        google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(reject)
+          .getArchivedInvoices();
       })
     };
 
@@ -687,7 +686,8 @@
     function Tabs({ activeTab, onChange }) {
       const tabs = [
         { id: 'dashboard', label: 'Дашборд', icon: <Icons.BarChart size="sm" /> },
-        { id: 'invoices', label: 'Счета', icon: <Icons.List size="sm" /> }
+        { id: 'invoices', label: 'Счета', icon: <Icons.List size="sm" /> },
+        { id: 'archive', label: 'Архив', icon: <Icons.Archive size="sm" /> }
       ];
 
       return (
@@ -1121,8 +1121,8 @@
                 onChange={(e) => setSortBy(e.target.value)}
                 className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orhun-teal focus:border-transparent outline-none"
               >
-                <option value="created_desc">Новые (последние к первым)</option>
-                <option value="created_asc">Старые (первые к последним)</option>
+                <option value="created_desc">Новые (последние → первые)</option>
+                <option value="created_asc">Старые (первые → последние)</option>
                 <option value="amount_desc">Сумма (по убыванию)</option>
                 <option value="amount_asc">Сумма (по возрастанию)</option>
                 <option value="date_desc">Дата счета (по убыванию)</option>
@@ -2108,6 +2108,235 @@
       );
     }
 
+    // ============================================
+    // ARCHIVE VIEW COMPONENT
+    // ============================================
+
+    function ArchiveView({ user, onView }) {
+      const [archivedInvoices, setArchivedInvoices] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [searchTerm, setSearchTerm] = useState('');
+      const [statusFilter, setStatusFilter] = useState('');
+      const [sortBy, setSortBy] = useState('created_desc');
+      
+      useEffect(() => {
+        loadArchive();
+      }, []);
+      
+      const loadArchive = async () => {
+        setLoading(true);
+        try {
+          const data = await API.getArchivedInvoices();
+          setArchivedInvoices(data);
+        } catch (error) {
+          console.error('Error loading archive:', error);
+        } finally {
+          setLoading(false);
+        }
+      };
+      
+      const filteredAndSortedInvoices = useMemo(() => {
+        let filtered = [...archivedInvoices];
+        
+        if (searchTerm) {
+          const term = searchTerm.toLowerCase();
+          filtered = filtered.filter(inv =>
+            inv.number.toLowerCase().includes(term) ||
+            inv.supplier.toLowerCase().includes(term) ||
+            inv.company.toLowerCase().includes(term)
+          );
+        }
+        
+        if (statusFilter) {
+          filtered = filtered.filter(inv => inv.status === statusFilter);
+        }
+        
+        const safeDate = (value) => {
+          const date = new Date(value || 0);
+          return isNaN(date) ? new Date(0) : date;
+        };
+        
+        const safeAmount = (value) => {
+          const num = Number(value);
+          return isNaN(num) ? 0 : num;
+        };
+        
+        filtered.sort((a, b) => {
+          switch (sortBy) {
+            case 'amount_desc':
+              return safeAmount(b.amount) - safeAmount(a.amount);
+            case 'amount_asc':
+              return safeAmount(a.amount) - safeAmount(b.amount);
+            case 'created_asc':
+              return safeDate(a.createdAt) - safeDate(b.createdAt);
+            case 'created_desc':
+            default:
+              return safeDate(b.createdAt) - safeDate(a.createdAt);
+          }
+        });
+        
+        return filtered;
+      }, [archivedInvoices, searchTerm, statusFilter, sortBy]);
+      
+      const totalsByCurrency = useMemo(() => {
+        return calculateTotalsByCurrency(filteredAndSortedInvoices);
+      }, [filteredAndSortedInvoices]);
+      
+      if (loading) {
+        return (
+          <div className="flex items-center justify-center py-20">
+            <div className="text-center">
+              <div className="spinner mx-auto mb-4"></div>
+              <div className="text-gray-600 text-sm">Загрузка архива...</div>
+            </div>
+          </div>
+        );
+      }
+      
+      return (
+        <div className="max-w-full mx-auto px-4 py-4 sm:py-6">
+          {/* Заголовок */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-4">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                  <span className="text-3xl">📦</span>
+                  <span>Архив счетов</span>
+                </h2>
+                <p className="text-sm text-gray-600 mt-1">
+                  Завершенные счета (оплачены или отклонены более 10 дней назад)
+                </p>
+              </div>
+              <button
+                onClick={loadArchive}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium flex items-center gap-2"
+              >
+                <span>🔄</span>
+                <span>Обновить</span>
+              </button>
+            </div>
+            
+            {/* Статистика */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-gray-50 rounded-lg p-3">
+                <div className="text-xs text-gray-600 mb-1">Всего в архиве</div>
+                <div className="text-2xl font-bold text-gray-900">{archivedInvoices.length}</div>
+              </div>
+              <div className="bg-emerald-50 rounded-lg p-3">
+                <div className="text-xs text-gray-600 mb-1">Оплачено</div>
+                <div className="text-2xl font-bold text-emerald-700">
+                  {archivedInvoices.filter(inv => inv.status === 'paid').length}
+                </div>
+              </div>
+              <div className="bg-red-50 rounded-lg p-3">
+                <div className="text-xs text-gray-600 mb-1">Отклонено</div>
+                <div className="text-2xl font-bold text-red-700">
+                  {archivedInvoices.filter(inv => inv.status === 'rejected').length}
+                </div>
+              </div>
+              <div className="bg-blue-50 rounded-lg p-3">
+                <div className="text-xs text-gray-600 mb-1">Итого</div>
+                {Object.entries(totalsByCurrency).map(([curr, amount]) => (
+                  <div key={curr} className="text-sm font-semibold text-blue-900">
+                    {formatAmount(amount, curr)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+          
+          {/* Фильтры */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 mb-4 p-3 sm:p-4 space-y-3">
+            <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
+              <input
+                type="text"
+                placeholder="Поиск..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+              />
+              
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+              >
+                <option value="">Все статусы</option>
+                <option value="paid">Оплачены</option>
+                <option value="rejected">Отклонены</option>
+              </select>
+              
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+              >
+                <option value="created_desc">Новые</option>
+                <option value="created_asc">Старые</option>
+                <option value="amount_desc">Сумма ↓</option>
+                <option value="amount_asc">Сумма ↑</option>
+              </select>
+            </div>
+          </div>
+          
+          {/* Таблица или карточки */}
+          {filteredAndSortedInvoices.length === 0 ? (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
+              <div className="text-gray-400 text-6xl mb-4">📦</div>
+              <div className="text-gray-600">
+                {searchTerm || statusFilter ? 'Нет результатов' : 'Архив пуст'}
+              </div>
+            </div>
+          ) : (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[800px]">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="p-3 text-left text-xs font-semibold text-gray-700 uppercase">№</th>
+                      <th className="p-3 text-left text-xs font-semibold text-gray-700 uppercase">Статус</th>
+                      <th className="p-3 text-left text-xs font-semibold text-gray-700 uppercase">Компания</th>
+                      <th className="p-3 text-left text-xs font-semibold text-gray-700 uppercase">Поставщик</th>
+                      <th className="p-3 text-right text-xs font-semibold text-gray-700 uppercase">Сумма</th>
+                      <th className="p-3 text-left text-xs font-semibold text-gray-700 uppercase">Дата завершения</th>
+                      <th className="p-3 text-center text-xs font-semibold text-gray-700 uppercase">Действия</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredAndSortedInvoices.map(inv => (
+                      <tr key={inv.id} className="border-b border-gray-100 hover:bg-gray-50">
+                        <td className="p-3 font-semibold text-sm">{inv.number}</td>
+                        <td className="p-3">
+                          <span className={`px-2 py-1 rounded-lg text-xs font-medium border ${STATUS_COLORS[inv.status]}`}>
+                            {STATUS_LABELS[inv.status]}
+                          </span>
+                        </td>
+                        <td className="p-3 text-sm max-w-[200px] truncate" title={inv.company}>{inv.company}</td>
+                        <td className="p-3 text-sm max-w-[200px] truncate" title={inv.supplier}>{inv.supplier}</td>
+                        <td className="p-3 text-right font-semibold text-sm whitespace-nowrap">{formatAmount(inv.amount, inv.currency)}</td>
+                        <td className="p-3 text-sm">
+                          {inv.status === 'paid' ? formatDate(inv.paidAt) : formatDate(inv.approvedAt)}
+                        </td>
+                        <td className="p-3 text-center">
+                          <button
+                            onClick={() => onView(inv)}
+                            className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                            title="Просмотр"
+                          >
+                            👁️
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     function CreateInvoiceModal({ isOpen, onClose, onCreate, config }) {
       const [formData, setFormData] = useState({
         company: '', number: '', supplier: '', supplierBIN: '', amount: '', currency: 'KZT',
@@ -2814,6 +3043,7 @@
 
       const handleLogout = () => {
         setAdminPanelOpen(false);
+        setActiveTab('dashboard');
         setCurrentUser(null);
         sessionStorage.removeItem('currentUser');
       };
@@ -3002,6 +3232,12 @@
                   onReload={loadData}
                   onNotify={showNotification}
                   initialStatusFilter={statusFilter}
+                />
+              )}
+              {activeTab === 'archive' && (
+                <ArchiveView
+                  user={currentUser}
+                  onView={(inv) => { setViewModalInvoice(inv); setViewModalOpen(true); }}
                 />
               )}
             </>

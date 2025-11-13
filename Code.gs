@@ -11,6 +11,7 @@ const CONFIG = {
   SHEET_NAME: 'Invoices',
   HISTORY_SHEET_NAME: 'History',
   SUPPLIERS_SHEET_NAME: 'Suppliers',
+  ARCHIVE_SHEET_NAME: 'ARCH',
   
   // Settings
   MAX_FILE_SIZE: 20 * 1024 * 1024, // 20 MB

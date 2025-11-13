@@ -504,37 +504,29 @@ function addCommentToInvoice(invoiceId, commentText, userInfo) {
   }
 }
 
-// Archive multiple invoices
+/**
+ * Архивировать несколько счетов
+ */
 function archiveMultipleInvoices(invoiceIds, userInfo) {
+  if (!userInfo || !userInfo.permissions || userInfo.permissions.indexOf('all') === -1) {
+    return {
+      success: false,
+      error: 'Недостаточно прав. Только администраторы могут архивировать счета.'
+    };
+  }
+  
   try {
-    const sheet = getOrCreateSheet();
-    const data = sheet.getDataRange().getValues();
-    
     let archivedCount = 0;
-    let errors = [];
+    const errors = [];
     
     for (let id of invoiceIds) {
-      let rowIndex = -1;
-      for (let i = 1; i < data.length; i++) {
-        if (String(data[i][0]) === String(id)) {
-          rowIndex = i + 1;
-          break;
-        }
-      }
+      const result = moveInvoiceToArchive(id, userInfo);
       
-      if (rowIndex === -1) {
-        errors.push('Счет ' + id + ' не найден');
-        continue;
+      if (result.success) {
+        archivedCount++;
+      } else {
+        errors.push('Счет ' + id + ': ' + result.error);
       }
-      
-      // Check if already archived
-      if (data[rowIndex-1][29]) {
-        errors.push('Счет ' + id + ' уже в архиве');
-        continue;
-      }
-      
-      sheet.getRange(rowIndex, 30).setValue(true); // Column AD (archived)
-      archivedCount++;
     }
     
     Logger.log('✅ Archived ' + archivedCount + ' invoices');
@@ -546,7 +538,7 @@ function archiveMultipleInvoices(invoiceIds, userInfo) {
     };
     
   } catch (error) {
-    Logger.log('❌ Error archiving invoices: ' + error);
+    Logger.log('❌ Error archiving multiple invoices: ' + error);
     return { success: false, error: error.message };
   }
 }
@@ -596,67 +588,8 @@ function unarchiveMultipleInvoices(invoiceIds, userInfo) {
  * Ручное архивирование счета (только для администратора)
  */
 function archiveInvoice(invoiceId, userInfo) {
-  if (!userInfo || !userInfo.permissions || userInfo.permissions.indexOf('all') === -1) {
-    return {
-      success: false,
-      error: 'Недостаточно прав. Только администраторы могут архивировать счета.'
-    };
-  }
-
-  const lock = LockService.getScriptLock();
-
-  try {
-    lock.waitLock(30000);
-
-    Logger.log('📦 Archiving invoice ' + invoiceId);
-
-    const sheet = getOrCreateSheet();
-    const data = sheet.getDataRange().getValues();
-
-    let rowIndex = -1;
-    for (let i = 1; i < data.length; i++) {
-      if (String(data[i][0]) === String(invoiceId)) {
-        rowIndex = i + 1;
-        break;
-      }
-    }
-
-    if (rowIndex === -1) {
-      return { success: false, error: 'Счет не найден' };
-    }
-
-    sheet.getRange(rowIndex, COLUMN.ARCHIVED + 1).setValue(true); // Column AD: archived
-
-    try {
-      if (typeof logAction === 'function') {
-        logAction(
-          invoiceId,
-          userInfo,
-          'ARCHIVE',
-          data[rowIndex - 1][COLUMN.STATUS],
-          data[rowIndex - 1][COLUMN.STATUS],
-          'Счет архивирован вручную администратором'
-        );
-      }
-    } catch (logError) {
-      Logger.log('⚠️ Log warning: ' + logError);
-    }
-
-    Logger.log('✅ Invoice archived successfully');
-    return {
-      success: true,
-      message: 'Счет успешно архивирован'
-    };
-
-  } catch (error) {
-    Logger.log('❌ Error archiving invoice: ' + error);
-    return {
-      success: false,
-      error: error.message || 'Не удалось архивировать счет'
-    };
-  } finally {
-    lock.releaseLock();
-  }
+  // Используем новую функцию из ArchiveOperations.gs
+  return moveInvoiceToArchive(invoiceId, userInfo);
 }
 
 /**
