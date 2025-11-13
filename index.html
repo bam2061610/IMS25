@@ -809,7 +809,6 @@
           paidSums: calculateTotalsByCurrency(paidInvoices),
           rejected: rejectedInvoices.length,
           rejectedSums: calculateTotalsByCurrency(rejectedInvoices),
-          archived: invoices.filter(inv => inv.archived).length,
           myPendingCount: myPendingInvoices.length,
           myPendingTotals: calculateTotalsByCurrency(myPendingInvoices)
         };
@@ -911,14 +910,6 @@
               totals={stats.rejectedSums} 
             />
             
-            <StatCard 
-              title="В архиве" 
-              value={stats.archived} 
-              icon={<Icons.Archive size="lg" />} 
-              bgColor="bg-gray-50" 
-              onClick={() => {}} 
-              totals={null} 
-            />
           </div>
         </div>
       );
